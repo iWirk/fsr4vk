@@ -72,7 +72,7 @@ def main():
     alias = (args.artifacts/'amd_fidelityfx_vk.dll').read_bytes()
     if sha(alias) != binaries['amd_fidelityfx_upscaler_vk.dll']['sha256']:
         raise ValueError('stock-name alias differs')
-    models = ['4.0.2', '4.1.1']
+    models = ['4.1.1']
     release_manifest = args.artifacts/'release-embedded'/'embedded-assets.json'
     if release_manifest.exists() and any(
             e['path'].startswith('fsr411-variant/') for e in

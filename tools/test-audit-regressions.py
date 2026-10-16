@@ -33,7 +33,7 @@ def main():
     parser.add_argument('--assets', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--backend', choices=('native-mixed-dot', 'portable-int8'), required=True,
-                        help='expected 4.0.2 backend; 4.1.1 is always portable')
+                        help='expected backend; 4.1.1 is always portable')
     parser.add_argument('--exposure-poison', action='store_true')
     parser.add_argument('--group', choices=('standard', 'resolutions', 'exposure', 'profiling', 'border'), default='standard')
     parser.add_argument('--windows-proton', type=Path, help='optional Proton runtime for the candidate PE only')
@@ -69,8 +69,13 @@ def main():
         diagnostic = args.output/(name+'.provider.log')
         env = dict(env_base, FSR4_TEST_VERSION=version, FSR4_TEST_RENDER_SIZE=size[0], FSR4_TEST_OUTPUT_SIZE=size[1],
                    FSR4_VK_LOG_PATH=str(diagnostic), **extra)
-        bundle = args.assets/'general'/('2160' if int(size[1].split('x')[0])>1920 or int(size[1].split('x')[1])>1080 else '1080')/'quality'
-        command = [str(executable), str(bundle), str(bundle/'initializers.bin'), str(bundle/'weights.bin'), str(image), mode]
+        bundle = args.assets/'fsr411'/'general'/('2160' if int(size[1].split('x')[0])>1920 or int(size[1].split('x')[1])>1080 else '1080')/'quality'
+        # 4.1.1 carries no weights file; the harness requires the positional
+        # argument but the provider path never reads it.
+        weights = bundle/'weights.bin'
+        if not weights.exists():
+            weights = bundle/'initializers.bin'
+        command = [str(executable), str(bundle), str(bundle/'initializers.bin'), str(weights), str(image), mode]
         if windows:
             env.pop('FSR4_VK_ASSET_ROOT', None)
             env.update(WINEPREFIX=str(args.wine_prefix), PROTONPATH=str(args.windows_proton), GAMEID='umu-default',
@@ -135,7 +140,7 @@ def main():
     else:
         cases = [('profile-series', ('1280x720','1920x1080'), {'FSR4_TEST_PROFILE_FRAMES':'24'})]
     try:
-        for version in ('4.0.2','4.1.1'):
+        for version in ('4.1.1',):
             for name, size, extra in cases:
                 key = version+'-'+name
                 control_extra = extra.copy()

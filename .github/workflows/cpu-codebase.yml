@@ -33,8 +33,8 @@ jobs:
         run: |
           python3 tools/test-package-release.py -v
           python3 -O tools/test-package-release.py -v
-          python3 tools/test-embed-general-assets.py -v
-          python3 -O tools/verify-general-assets.py assets/general
+          python3 tools/test-embed-fsr411-assets.py -v
+          python3 -O tools/fsr411-assets.py assets/fsr411
       - uses: actions/upload-artifact@v4
         if: always()
         with:

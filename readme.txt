@@ -1,4 +1,4 @@
-FSR4VK INT8 (4.1.1vk and 4.0.2vk)
+FSR4VK INT8 (4.1.1vk and 4.1.1vk Perf)
 If you encounter any problems or bugs, please report them in the OptiScaler discord with @de_w23 or put up an issue in GitHub.
 
 Installation steps:

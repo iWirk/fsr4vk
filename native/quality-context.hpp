@@ -16,11 +16,13 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <vector>
 #include <functional>
+#include <optional>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -85,36 +87,6 @@ inline void check(VkResult result, const char* operation) {
                 "; the driver did not identify the missing bit/extension. See the provider device-create contract and context=0 negotiation log; inspect the host VkDeviceCreateInfo. Enabled feature bits cannot be queried after device creation");
         throw std::runtime_error(std::string(operation) + " failed with " + fsr4vk::result_description(result));
     }
-}
-
-// Validate a VkPipelineCache blob before feeding it to vkCreatePipelineCache.
-// Layout is VkPipelineCacheHeaderVersionOne (32 bytes, little-endian on the
-// supported hosts): headerSize, headerVersion==1, vendorID, deviceID,
-// pipelineCacheUUID[16]. The driver ignores incompatible caches on its own;
-// this check only decides what gets logged. Never throws.
-inline bool validate_pipeline_cache_seed(VkPhysicalDevice physical,
-                                         const std::vector<std::uint8_t>& bytes,
-                                         std::string* detail=nullptr) {
-    try {
-        if (bytes.size() < 32) { if (detail) *detail = "too_small"; return false; }
-        uint32_t head[4] = {};
-        std::memcpy(head, bytes.data(), sizeof(head)); // LE host order on x86-64/AArch64-LE
-        if (head[0] < 32 || head[1] != VK_PIPELINE_CACHE_HEADER_VERSION_ONE) {
-            if (detail) *detail = "bad_header";
-            return false;
-        }
-        VkPhysicalDeviceProperties props {};
-        vkGetPhysicalDeviceProperties(physical, &props);
-        if (head[2] != props.vendorID || head[3] != props.deviceID) {
-            if (detail) *detail = "device_mismatch";
-            return false;
-        }
-        if (std::memcmp(bytes.data() + 16, props.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
-            if (detail) *detail = "uuid_mismatch";
-            return false;
-        }
-        return true;
-    } catch (...) { if (detail) *detail = "exception"; return false; }
 }
 
 inline std::vector<std::uint8_t> read_bytes(const fs::path& path) {
@@ -286,6 +258,7 @@ inline VkDeviceAddress device_address(PFN_vkGetBufferDeviceAddress get_buffer_de
 class QualityContext {
     VkPhysicalDevice physical_device;
     VkDevice device;
+    PFN_vkGetDeviceProcAddr get_device_proc_addr = nullptr;
     fsr4vk::DeviceDispatch dispatch;
     fsr4vk::DescriptorDispatch descriptor_dispatch;
     fsr4vk::DescriptorLayout descriptor_layout;
@@ -309,6 +282,33 @@ class QualityContext {
     bool nms_inputs = false;
     bool external_exposure = false;
     bool native_mixed_dot = false;
+    // Optional wave64 path, resolved once per context: require a 64-wide
+    // compute subgroup when the physical device advertises the range.
+    // computeFullSubgroups stays off (probe parity, safer occupancy).
+    mutable std::optional<bool> wave64_required;
+    bool use_wave64() const {
+        // 4.1.1-family only: any other (retired/harness) layout keeps
+        // byte-identical pipeline creation (same cache keys).
+        if (!fsr411) return false;
+        if (!wave64_required) {
+            VkPhysicalDeviceSubgroupSizeControlProperties subgroup_properties{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties2{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties2.pNext = &subgroup_properties;
+            vkGetPhysicalDeviceProperties2(physical_device, &properties2);
+            wave64_required =
+                subgroup_properties.minSubgroupSize <= 64 &&
+                64 <= subgroup_properties.maxSubgroupSize &&
+                (subgroup_properties.requiredSubgroupSizeStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
+            if (build_message) build_message(std::string("subgroup_size_control min=")+
+                std::to_string(subgroup_properties.minSubgroupSize)+" max="+
+                std::to_string(subgroup_properties.maxSubgroupSize)+" stages="+
+                std::to_string(subgroup_properties.requiredSubgroupSizeStages)+" wave64="+
+                (*wave64_required ? "attempt" : "skip"));
+        }
+        return *wave64_required;
+    }
     VkQueryPool profile_queries{};
     double timestamp_period = 0;
     std::string profile_path;
@@ -407,8 +407,108 @@ public:
         return true; // Caller must reset temporal history on the transition.
     }
 private:
-    VkPipeline create_pipeline(const std::vector<std::uint32_t>& original,const char* name) {
-        const auto started=std::chrono::steady_clock::now();
+    // Optional pipeline-executable dump (FSR4_VK_CAPTURE_STATS). Emits one
+    // parse-friendly line per executable with every driver statistic, plus
+    // ISA text files when FSR4_VK_CAPTURE_ISA_DIR is set. Never throws: a
+    // diagnostic failure must not fail pipeline creation.
+    void dump_executable_stats(const char* name,VkPipeline pipeline) noexcept {
+        try {
+            const auto get_props=reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(
+                get_device_proc_addr(device,"vkGetPipelineExecutablePropertiesKHR"));
+            const auto get_stats=reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(
+                get_device_proc_addr(device,"vkGetPipelineExecutableStatisticsKHR"));
+            const auto get_reps=reinterpret_cast<PFN_vkGetPipelineExecutableInternalRepresentationsKHR>(
+                get_device_proc_addr(device,"vkGetPipelineExecutableInternalRepresentationsKHR"));
+            if(!get_props || !get_stats || !get_reps) {
+                build_message(std::string("exec_stats name=")+name+" unavailable=entry-points");
+                return;
+            }
+            VkPipelineInfoKHR exec_info{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+            exec_info.pipeline=pipeline;
+            uint32_t exec_count=0;
+            if(get_props(device,&exec_info,&exec_count,nullptr)!=VK_SUCCESS) {
+                build_message(std::string("exec_stats name=")+name+" unavailable=query");
+                return;
+            }
+            std::vector<VkPipelineExecutablePropertiesKHR> execs(exec_count,
+                {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+            if(get_props(device,&exec_info,&exec_count,execs.data())!=VK_SUCCESS) {
+                build_message(std::string("exec_stats name=")+name+" unavailable=list");
+                return;
+            }
+            const char* isa_dir=std::getenv("FSR4_VK_CAPTURE_ISA_DIR");
+            for(uint32_t e=0;e<exec_count;++e) {
+                VkPipelineExecutableInfoKHR info{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+                info.pipeline=pipeline;
+                info.executableIndex=e;
+                uint32_t stat_count=0;
+                std::string line=std::string("exec_stats name=")+name+" exec="+execs[e].name;
+                if(get_stats(device,&info,&stat_count,nullptr)==VK_SUCCESS) {
+                    std::vector<VkPipelineExecutableStatisticKHR> stats(stat_count,
+                        {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+                    if(get_stats(device,&info,&stat_count,stats.data())==VK_SUCCESS) {
+                        char value[64];
+                        for(const auto& s:stats) {
+                            switch(s.format) {
+                            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                                std::snprintf(value,sizeof(value),"%u",unsigned(s.value.b32)); break;
+                            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                                std::snprintf(value,sizeof(value),"%lld",(long long)s.value.i64); break;
+                            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                                std::snprintf(value,sizeof(value),"%llu",(unsigned long long)s.value.u64); break;
+                            default:
+                                std::snprintf(value,sizeof(value),"%f",s.value.f64); break;
+                            }
+                            line+=' ';
+                            line+=s.name;
+                            line+='=';
+                            line+=value;
+                        }
+                    }
+                }
+                uint32_t rep_count=0;
+                std::string isa_file;
+                if(get_reps(device,&info,&rep_count,nullptr)==VK_SUCCESS && rep_count) {
+                    std::vector<VkPipelineExecutableInternalRepresentationKHR> reps(rep_count,
+                        {VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INTERNAL_REPRESENTATION_KHR});
+                    if(get_reps(device,&info,&rep_count,reps.data())==VK_SUCCESS) {
+                        for(const auto& r:reps) {
+                            line+=" rep:";
+                            line+=r.name;
+                            line+=r.isText ? "=text" : "=binary";
+                            if(isa_dir && r.isText && r.dataSize) {
+                                std::string base=name;
+                                for(auto& ch:base) if(ch=='.'||ch=='/'||ch=='\\')ch='_';
+                                isa_file=std::string(isa_dir)+"/"+base+".exec"+std::to_string(e)+"."+
+                                    r.name+".txt";
+                            }
+                        }
+                        if(!isa_file.empty()) {
+                            // Re-query with caller-allocated buffers.
+                            std::vector<std::vector<uint8_t>> blobs(rep_count);
+                            for(uint32_t ri=0;ri<rep_count;++ri) {
+                                blobs[ri].resize(reps[ri].dataSize);
+                                reps[ri].pData=blobs[ri].empty()?nullptr:blobs[ri].data();
+                            }
+                            if(get_reps(device,&info,&rep_count,reps.data())==VK_SUCCESS) {
+                                for(uint32_t ri=0;ri<rep_count;++ri) {
+                                    const auto& r=reps[ri];
+                                    if(!r.isText || !r.dataSize || !r.pData)continue;
+                                    std::ofstream out(isa_file,std::ios::binary);
+                                    if(out)out.write(static_cast<const char*>(r.pData),r.dataSize);
+                                    line+=" file=";
+                                    line+=isa_file;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                build_message(line);
+            }
+        } catch(...) { /* Diagnostic only. */ }
+    }
+    VkPipeline create_pipeline(const std::vector<std::uint32_t>& original,const char* name) {        const auto started=std::chrono::steady_clock::now();
         if(build_message) build_message(std::string("pipeline_enter name=")+name+" words="+std::to_string(original.size())+
             " bytes="+std::to_string(original.size()*sizeof(std::uint32_t)));
         const auto& code=original;
@@ -423,15 +523,37 @@ private:
         adopt_resource(modules,module,[&](auto handle){vkDestroyShaderModule(device,handle,nullptr);});
         VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         stage.stage=VK_SHADER_STAGE_COMPUTE_BIT; stage.module=module; stage.pName="main";
+        // Optional wave64 requirement. The device negotiation enables
+        // subgroupSizeControl when supported; devices created before that
+        // (or drivers rejecting 64) report FEATURE_NOT_PRESENT and fall back
+        // to no requirement, preserving exact behavior there.
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfo wave{
+            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+        wave.requiredSubgroupSize=use_wave64() ? 64 : 0;
+        if (wave.requiredSubgroupSize) stage.pNext=&wave;
         VkComputePipelineCreateInfo info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         info.flags=VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+        // Optional pipeline-statistics capture (FSR4_VK_CAPTURE_STATS, device
+        // feature negotiated in the provider). Diagnostic only: changes cache
+        // keys, so seeded caches miss while set. Never enabled otherwise.
+        const bool capture_stats=std::getenv("FSR4_VK_CAPTURE_STATS")!=nullptr;
+        if(capture_stats) info.flags|=VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR|
+            VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
         info.stage=stage; info.layout=pipeline_layout;
         VkPipeline pipeline{};
-        const auto result=vkCreateComputePipelines(device,pipeline_cache,1,&info,nullptr,&pipeline);
+        auto result=vkCreateComputePipelines(device,pipeline_cache,1,&info,nullptr,&pipeline);
+        if (wave.requiredSubgroupSize &&
+            (result==VK_ERROR_FEATURE_NOT_PRESENT || result==VK_ERROR_EXTENSION_NOT_PRESENT)) {
+            stage.pNext=nullptr; info.stage=stage;
+            if(build_message) build_message(std::string("pipeline_wave64_fallback name=")+name+" result="+
+                fsr4vk::result_description(result));
+            result=vkCreateComputePipelines(device,pipeline_cache,1,&info,nullptr,&pipeline);
+        }
         if(build_message) build_message(std::string("pipeline_compile name=")+name+" result="+
-            fsr4vk::result_description(result));
+            fsr4vk::result_description(result)+(wave.requiredSubgroupSize ? " wave64" : ""));
         if(pipeline) adopt_resource(owned_pipelines,pipeline,[&](auto handle){vkDestroyPipeline(device,handle,nullptr);});
         check(result,name);
+        if(capture_stats && pipeline && build_message) dump_executable_stats(name,pipeline);
         if(build_message) build_message(std::string("pipeline_complete name=")+name+" cpu_ms="+
             std::to_string(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count()));
         return pipeline;
@@ -461,7 +583,7 @@ public:
     }
     // Capture the compiled pipeline cache (call after successful construction,
     // before destruction, single-threaded). Returns empty when the driver
-    // reports zero size. Used to seed machines where cold compilation hangs.
+    // reports zero size. Diagnostic aid for the resource probe.
     std::vector<std::uint8_t> pipeline_cache_data() const {
         std::vector<std::uint8_t> bytes;
         if (!pipeline_cache) return bytes;
@@ -493,6 +615,7 @@ public:
                    std::function<void(const std::string&)> progress={},
                    uint32_t queue_family_index=UINT32_MAX)
         : physical_device(physical), device(logical),
+          get_device_proc_addr(get_device_proc_addr),
           dispatch(logical, get_device_proc_addr, api_version,false),
           descriptor_dispatch(logical,get_device_proc_addr),build_message(std::move(progress)),nms_inputs(nms),
           external_exposure(external_exposure_input) {
@@ -534,36 +657,6 @@ public:
         native_mixed_dot = !fsr411 && enabled_native_mixed_dot.value_or(true) && fsr4vk::supportsNativeMixedDot(
             physical, vkGetPhysicalDeviceFeatures2, vkEnumerateDeviceExtensionProperties);
         VkPipelineCacheCreateInfo cache_info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-        // Optional cold-compile workaround seed (Enshrouded model_6 hang on AMD
-        // Windows): a blob captured natively on the same GPU/driver lets
-        // vkCreateComputePipelines take the cache-hit path instead of invoking
-        // the runaway compiler. Scoped to 4.0.2 portable; any miss/staleness
-        // falls back to empty (status quo). Never throws: missing seed is normal.
-        std::vector<std::uint8_t> cache_seed;
-        if (!fsr411 && !native_mixed_dot) {
-            try {
-                fs::path seed_path = shader_dir / "pipeline_cache.portable.bin";
-                if (const char* env = std::getenv("FSR4_VK_PIPELINE_CACHE_PATH")) {
-                    if (*env) seed_path = env; // explicit override wins (game testing)
-                }
-                std::error_code seed_ec;
-                if (!seed_path.empty() && fs::is_regular_file(seed_path, seed_ec)) {
-                    auto bytes = read_bytes(seed_path);
-                    std::string why;
-                    if (validate_pipeline_cache_seed(physical, bytes, &why)) {
-                        cache_seed = std::move(bytes);
-                        cache_info.initialDataSize = cache_seed.size();
-                        cache_info.pInitialData = cache_seed.data();
-                        if(build_message) build_message("pipeline_cache_seed accepted bytes="+
-                            std::to_string(cache_seed.size())+" path="+seed_path.string());
-                    } else if(build_message) {
-                        build_message("pipeline_cache_seed rejected ("+why+") path="+seed_path.string());
-                    }
-                } else if (std::getenv("FSR4_VK_PIPELINE_CACHE_PATH") && build_message) {
-                    build_message("pipeline_cache_seed env path unreadable, proceeding empty");
-                }
-            } catch (...) { /* missing/unreadable seed -> cold compile */ }
-        }
         const auto cache_result=vkCreatePipelineCache(device,&cache_info,nullptr,&pipeline_cache);
         if(cache_result==VK_ERROR_DEVICE_LOST) check(cache_result,"vkCreatePipelineCache");
         if(cache_result!=VK_SUCCESS) {

@@ -51,15 +51,12 @@ struct Fsr4VulkanApiVersionDesc {
     std::uint32_t apiVersion;
 };
 
-constexpr std::uint64_t kVersionId =
-    (0xF5A5CA1Eull << 32) | ((4ull << 22) | (0ull << 12) | 2ull);
 constexpr std::uint64_t kFsr314CompatibilityVersionId =
     (0xF5A5CA1Eull << 32) | ((3ull << 22) | (1ull << 12) | 4ull);
 constexpr std::uint64_t kVersion411Id =
     (0xF5A5CA1Eull << 32) | ((4ull << 22) | (1ull << 12) | 1ull);
 // The installed VK INT8 selector prefixes these verbatim with "FSR".
 // Keep the leading space here; version IDs, not labels, select the model.
-constexpr const char* kVersionName = " 4.0.2 VK INT8";
 constexpr const char* kVersion411Name = " 4.1.1 VK INT8";
 // Opt-in rewritten-shader variant of 4.1.1 (same model, same 28-pass layout).
 // Patch 2 is a marker only: parse_version() still reads 4.1.1 from the name,
@@ -73,7 +70,7 @@ struct ProviderContext {
     std::recursive_mutex api_mutex;
     inline static std::atomic<std::uint64_t> next_id{0};
     const std::uint64_t diagnostic_id=++next_id;
-    std::uint64_t version = kVersionId;
+    std::uint64_t version = kVersion411Id;
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
     PFN_vkGetDeviceProcAddr getDeviceProcAddr = nullptr;
@@ -248,8 +245,7 @@ constexpr bool is411family(std::uint64_t version) noexcept {
 
 const char* versionName(std::uint64_t version) noexcept {
     if (version == kVersion411PerfId) return kVersion411PerfName;
-    if (version == kVersion411Id) return kVersion411Name;
-    return kVersionName;
+    return kVersion411Name;
 }
 
 float upscaleRatio(std::uint32_t qualityMode) {
@@ -459,10 +455,10 @@ static ffxReturnCode_t createContextImpl(
         }
     }
     const auto version = findVersion(header);
-    // Well-behaved callers query this DLL and request kVersionId. Some games
-    // loading amd_fidelityfx_vk.dll pin the stock FSR 3.1.4 provider ID
-    // instead; accept that ABI-compatible selection as a drop-in alias.
-    if (version != 0 && version != kVersionId && version != kVersion411Id &&
+    // Well-behaved callers query this DLL and request a 4.1.1-family ID.
+    // The retired 4.0.2 ID is rejected; games pinning the stock FSR 3.1.4
+    // provider ID are accepted as a drop-in alias for stock 4.1.1.
+    if (version != 0 && version != kVersion411Id &&
         version != kVersion411PerfId &&
         version != kFsr314CompatibilityVersionId) {
         return FFX_API_RETURN_NO_PROVIDER;
@@ -478,8 +474,7 @@ static ffxReturnCode_t createContextImpl(
     ProviderContext* provider=nullptr;
     try { provider=new (storage) ProviderContext{}; }
     catch (...) { deallocate(callbacks,storage); throw; }
-    provider->version = version==kVersion411PerfId ? kVersion411PerfId :
-        is411family(version) ? kVersion411Id : kVersionId;
+    provider->version = version==kVersion411PerfId ? kVersion411PerfId : kVersion411Id;
     provider->device = backend->device;
     provider->physicalDevice = backend->physicalDevice;
     provider->getDeviceProcAddr = backend->getDeviceProcAddr;
@@ -501,7 +496,7 @@ static ffxReturnCode_t createContextImpl(
     provider->message = create->fpMessage;
     try {
         const auto assets=version==kVersion411PerfId ? asset_root()/"fsr411-variant" :
-            version==kVersion411Id ? asset_root()/"fsr411" : asset_root();
+            asset_root()/"fsr411";
         provider->assets=assets;
         const bool embedded=fsr4assets::is_embedded(assets);
         if (!embedded) {
@@ -615,18 +610,14 @@ static ffxReturnCode_t queryImpl(
         }
         const std::uint64_t capacity = *query->outputCount;
         if (capacity > 0) {
-            if (query->versionIds) query->versionIds[0] = kVersionId;
-            if (query->versionNames) query->versionNames[0] = kVersionName;
+            if (query->versionIds) query->versionIds[0] = kVersion411Id;
+            if (query->versionNames) query->versionNames[0] = kVersion411Name;
         }
         if (capacity > 1) {
-            if (query->versionIds) query->versionIds[1] = kVersion411Id;
-            if (query->versionNames) query->versionNames[1] = kVersion411Name;
+            if (query->versionIds) query->versionIds[1] = kVersion411PerfId;
+            if (query->versionNames) query->versionNames[1] = kVersion411PerfName;
         }
-        if (capacity > 2) {
-            if (query->versionIds) query->versionIds[2] = kVersion411PerfId;
-            if (query->versionNames) query->versionNames[2] = kVersion411PerfName;
-        }
-        *query->outputCount = 3;
+        *query->outputCount = 2;
         return FFX_API_RETURN_OK;
     }
     return queryUpscale(context, header);

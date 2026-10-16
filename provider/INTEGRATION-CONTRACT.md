@@ -33,11 +33,7 @@ enable the corresponding `VK_KHR_shader_float16_int8`, `VK_KHR_8bit_storage`,
 `synchronization2`, `shaderIntegerDotProduct`; below 1.3 enable
 `VK_KHR_synchronization2` and `VK_KHR_shader_integer_dot_product`.
 
-4.0.2 uses native mixed-dot only if its full optional bundle is usable:
-`VK_VALVE_shader_mixed_float_dot_product` with
-`shaderMixedFloatDotProductFloat16AccFloat32`, and float-controls2 support and
-enablement. Otherwise it uses portable INT8. 4.1.1 uses the portable bundle.
-No Cooperative Matrix path exists.
+4.1.1 always uses the portable INT8 bundle. No Cooperative Matrix path exists.
 
 The optional version-1 `ffx_vk_create_device_features.h` query/create descriptor
 copies flags from the *successful final* VkDeviceCreateInfo while its storage is
@@ -92,21 +88,17 @@ event VkResults retain their identity. Opt-in pipeline progress logs name the
 pass and CPU creation duration. GPU-memory-usage v1 reports owned VkDeviceMemory
 allocation bytes, excluding caller images and driver pipeline/cache internals.
 
-Optional pipeline-cache seed (cold-compile workaround): `QualityContext` loads
-`<bundle>/pipeline_cache.portable.bin` when present (4.0.2 portable only), or
-the file named by `FSR4_VK_PIPELINE_CACHE_PATH` which wins when set. The 32-byte
-`VkPipelineCacheHeaderVersionOne` vendor/device/UUID is checked against the live
-physical device and logged as accepted/rejected; any miss proceeds with an empty
-cache (status quo). Capture via `FSR4_VK_PIPELINE_CACHE_DUMP=<out>` in
-`pipeline-resource-probe` on the same GPU/driver; blobs are not portable across
-devices/drivers.
+Pipeline caches start empty every context; the driver-owned cache object is
+still used for creation. `pipeline_cache_data()` remains available to the
+resource probe as a diagnostic aid.
 
-Advertised upscaler versions: `4.0.2`, `4.1.1`, and opt-in `4.1.1 Perf`
+Advertised upscaler versions: `4.1.1`, and opt-in `4.1.1 Perf`
 (same 4.1.1 model with rewritten shaders, generated at build time by
 `tools/generate-fsr411-variant.py` from frozen 4.1.1 assets; see its provenance
-record and the validation report). Order is stable (`[0]=4.0.2, [1]=4.1.1,
-[2]=Perf`) so saved indices keep their meanings; unknown future indices clamp
-to `4.0.2` on the host side as before.
+record and the validation report). Order is stable (`[0]=4.1.1,
+[1]=Perf`) so saved indices keep their meanings; unknown future indices clamp
+to `4.1.1` on the host side as before. The retired `4.0.2` ID is rejected
+(`FFX_API_RETURN_NO_PROVIDER`); the stock FSR 3.1.4 alias maps to 4.1.1.
 
 `FSR4_VK_PROFILE_PATH` is now a filename prefix, not an overwritable final-frame
 CSV. Each core/session writes `<prefix>.<identity>.jsonl`, with per-frame model,

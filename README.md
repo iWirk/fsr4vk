@@ -1,7 +1,8 @@
 # fsr4vk
 
 `fsr4vk` is an experimental native Vulkan FFX upscaler provider for the
-FSR 4.1.1 and FSR 4.0.2 INT8 models, together with the OptiScaler integration used to load them.
+FSR 4.1.1 INT8 model (plus its opt-in Perf shader variant), together with
+the OptiScaler integration used to load them.
 
 ## AI Disclosure
 
@@ -44,11 +45,11 @@ compiler's search path, set `FSR4_VULKAN_IMPORT_LIBRARY` to its full path.
 ```sh
 export VULKAN_SDK=/path/to/vulkan-sdk
 export FSR4_VULKAN_IMPORT_LIBRARY=/path/to/libvulkan-1.a
-export FSR4_EMBED_ASSETS="$PWD/assets/general"
+export FSR4_EMBED_ASSETS="$PWD/assets/fsr411"
 ./tools/build-vulkan-provider-windows.sh
 ```
 
-The script verifies both versions' shader/model bundles and builds two
+The script verifies the 4.1.1 shader/model bundles and builds two
 self-contained providers:
 
 ```text
@@ -57,8 +58,8 @@ build/provider-windows/amd_fidelityfx_upscaler_vk_debug.dll
 ```
 
 Set `FSR4_PROVIDER_OUTPUT_DIR` to change the output directory or
-`FSR4_EMBED_ASSETS` to build with another verified `assets/general` tree and
-its sibling `assets/portable`, `assets/colors`, and `assets/fsr411` trees. The portable INT8 backend is selected
+`FSR4_EMBED_ASSETS` to build with another verified `assets/fsr411` tree
+(with `general/` and `colors/` children). The portable INT8 backend is selected
 automatically when the VALVE mixed-dot feature is unavailable. Initial NVIDIA
 validation covers the RTX 3070 Ti through Proton, not native Windows NVIDIA.
 
@@ -75,7 +76,7 @@ optiscaler/x64/Release/a/OptiScaler.dll
 
 Follow the installation steps in [readme.txt](readme.txt), also included verbatim
 in the ZIP. Select **FSR 3.X** in the Upscalers tab; the FFX provider selector
-offers **FSR 4.1.1 VK INT8** and **FSR 4.0.2 VK INT8**.
+offers **FSR 4.1.1 VK INT8** and **FSR 4.1.1 VK INT8 Perf**.
 
 The current experimental path requires Vulkan 1.1 or newer and the provider's
 required Vulkan device features. The validated hardware baseline is an RDNA2

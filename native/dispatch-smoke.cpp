@@ -1486,10 +1486,10 @@ int main(int argc, char** argv) {
                 model_version.header.type=FFX_API_DESC_TYPE_OVERRIDE_VERSION;
                 if (const char* version=std::getenv("FSR4_TEST_VERSION")) {
                     const std::string want = version;
-                    if(want!="4.1.1" && want!="4.0.2" && want!="4.1.1-perf")
-                        throw std::invalid_argument("FSR4_TEST_VERSION must be 4.0.2, 4.1.1 or 4.1.1-perf");
+                    if(want!="4.1.1" && want!="4.1.1-perf")
+                        throw std::invalid_argument("FSR4_TEST_VERSION must be 4.1.1 or 4.1.1-perf (4.0.2 retired)");
                     model_version.versionId=(0xF5A5CA1Eull<<32) | (4ull<<22) |
-                        (want=="4.1.1-perf" ? (1ull<<12)|2ull : want=="4.1.1" ? (1ull<<12)|1ull : 2ull);
+                        (want=="4.1.1-perf" ? (1ull<<12)|2ull : (1ull<<12)|1ull);
                     model_version.header.pNext=&feature_snapshot.header;
                     backend.header.pNext=&model_version.header;
                 }

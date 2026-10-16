@@ -74,6 +74,15 @@ matrix, and the RDR2 native context — while fixing no open crash (Enshrouded i
 safe via the quirk default). Revisit only as a versioned breaking change with
 fresh paired captures.
 
+### 2026-10-16 reversal: 4.0.2 retired by owner approval
+
+The removal was executed anyway: provider advertises `[0]=4.1.1,[1]=Perf`,
+the 4.0.2 version ID is rejected, 4.0.2 asset trees and the cache-seed support
+are gone, and the Enshrouded quirk defaults to Perf at index 1. Consciously
+lost versus the above: the odd-edge oracle, the native-mixed-dot consumer
+path, the 4.0.2 half of the paired matrix, and the RDR2 native context. Stale
+explicit `UpscalerIndex=2` configs clamp to `4.1.1` (index 0), not Perf.
+
 ## Open (out of scope)
 
 - AMD driver report with repro package (deferred by owner).

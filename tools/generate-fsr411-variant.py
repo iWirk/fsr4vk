@@ -7,8 +7,12 @@ references/fsr4-shader-performance-overrides tools, and writes a variant tree
 with patched manifests plus a provenance record. Deterministic: no timestamps.
 
 Stacking (mirrors upstream tools/build_override.sh):
+  prepass       : prepass_route_fma.py (owned; portable FMul/FAdd form of the
+                  upstream route: 12 exchanges instead of 32, tail spread
+                  over four threads; output-exact)
   generic model : model_clamp.py | model_tail.py            (keep iff changed)
-  model_11      : zconst.py -> pass11_stores.py -> clamp | tail
+  model_11      : model_clamp.py | model_tail.py             (zconst+stores
+                  dropped: the zconst-enabled unroll spills on AMDVLK/RDNA2)
   postpass      : model_tail.py | model_clamp.py | postpass_taps.py
                   -> postpass_direct.py -> [re-disasm] postpass_sharetaps.py
 Prepass (pass-01), borders, SPD and bins are copied verbatim (prepass variant
@@ -31,6 +35,10 @@ MODEL_FILES = ["pass-%02d.spv" % (2 * n + 1)
                for n in (1, 2, 4, 5, 7, 8, 9, 10, 12)]
 PASS11_FILE = "pass-23.spv"
 POSTPASS_FILE = "pass-27.spv"
+PREPASS_FILE = "pass-01.spv"
+# Owned prepass router (portable FMul/FAdd form); lives in our tools/, not the
+# pinned reference tree, because upstream only routes the native DOT form.
+PREPASS_ROUTE = ROOT / "tools" / "prepass_route_fma.py"
 
 
 def sha(b: bytes) -> str:
@@ -91,8 +99,8 @@ def main() -> None:
     tmp = out / ".work"
     tmp.mkdir()
     stacking = {"model": ["model_clamp.py", "model_tail.py"],
-                "pass11": ["zconst.py", "pass11_stores.py",
-                           "model_clamp.py", "model_tail.py"],
+                "pass11": ["model_clamp.py", "model_tail.py"],
+                "prepass": ["prepass_route_fma.py"],
                 "postpass": ["model_tail.py", "model_clamp.py",
                              "postpass_taps.py", "postpass_direct.py",
                              "postpass_sharetaps.py"]}
@@ -109,17 +117,25 @@ def main() -> None:
                 return None, note + " unchanged"
             return ("AS", t2, note)
         if kind == "pass11":
-            rcs, t3, e3 = run_text(a.scripts / "zconst.py", text)
-            if rcs:
-                return None, "zconst refused"
-            rcp, t4, e4 = run_text(a.scripts / "pass11_stores.py", t3)
-            base_text, note = (t4, "zconst stores ") if not rcp else (t3, "zconst stores-skipped ")
-            rc1, t5, e1 = run_text(a.scripts / "model_clamp.py", base_text)
-            rc2, t6, e2 = run_text(a.scripts / "model_tail.py", t5)
-            note += f"clamp[{e1}] tail[{e2}]"
-            if rc2 or t6 == text:
+            # zconst+stores deliberately NOT applied: on AMDVLK/RDNA2 the
+            # zconst-enabled full unroll spills (+70% measured on pass-23;
+            # stores only partly mitigates). clamp|tail alone is neutral.
+            rc1, t1, e1 = run_text(a.scripts / "model_clamp.py", text)
+            rc2, t2, e2 = run_text(a.scripts / "model_tail.py", t1)
+            note = f"clamp[{e1}] tail[{e2}]"
+            if rc2 or t2 == text:
                 return None, note + " unchanged"
-            return ("AS", t6, note)
+            return ("AS", t2, note)
+        if kind == "prepass":
+            # Owned route transform for the portable prepass (32 -> 12 quad
+            # exchanges, tail spread over four threads). Refuses loudly on
+            # structural surprise; the runtime quad-bounds guard accepts the
+            # reassembled module by structure, not baked-in ids.
+            rcr, tr, er = run_text(PREPASS_ROUTE, text)
+            note = f"route[{er}]"
+            if rcr or not tr:
+                return None, note + " refused"
+            return ("AS", tr, note)
         # postpass: tail|clamp|taps -> direct -> as -> dis -> sharetaps -> as(v1.1)
         rc1, t1, e1 = run_text(a.scripts / "model_tail.py", text)
         rc2, t2, e2 = run_text(a.scripts / "model_clamp.py", t1)
@@ -151,8 +167,9 @@ def main() -> None:
         text = disasm(src)
         tag = f"{rel.parent.as_posix().replace('/', '_')}_{src.stem}"
         res = build(kind, text, tag)
-        if res is None:
-            print(f"{rel}: no rewrite ({tag})")
+        if res is None or res[0] is None:
+            note = (" " + res[1]) if res is not None else ""
+            print(f"{rel}: no rewrite ({tag}){note}")
             done[h] = (tag, False)
             records.append({"path": rel.as_posix(), "source_sha256": h,
                             "sha256": h, "stacking": stacking[kind],
@@ -222,10 +239,12 @@ def main() -> None:
     done = {}
     work_out = {}
     ok = True
-    # general bundles: model files + pass11 + postpass
+    # general bundles: prepass + model files + pass11 + postpass
     for b in sorted((out / "general").glob("*/*")):
         if not b.is_dir():
             continue
+        ok &= process("prepass", b / PREPASS_FILE,
+                      Path("general") / b.relative_to(out / "general") / PREPASS_FILE)
         for m in MODEL_FILES:
             ok &= process("model", b / m,
                           Path("general") / b.relative_to(out / "general") / m)

@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -334,6 +335,19 @@ class DeviceFeatures
         VkPhysicalDeviceSynchronization2Features synchronization2 {
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES
         };
+        // Optional wave64 path: queried but never required. When supported
+        // the feature is enabled below so pipeline creation may require a
+        // 64-wide subgroup; creation falls back to no requirement otherwise.
+        VkPhysicalDeviceSubgroupSizeControlFeatures subgroupControl {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES
+        };
+        // Optional pipeline-statistics capture (FSR4_VK_CAPTURE_STATS):
+        // queried but never required. When requested and supported, the
+        // extension is enabled and pipelineExecutableInfo set below so
+        // pipeline creation may capture statistics/internal representations.
+        VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR executableProps {
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR
+        };
         VkPhysicalDeviceFeatures2 available { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
         VkBaseOutStructure* queryTail = reinterpret_cast<VkBaseOutStructure*>(&available);
         const auto appendQuery = [&queryTail](auto& feature)
@@ -364,6 +378,8 @@ class DeviceFeatures
         appendQuery(derivatives);
         appendQuery(mixed);
         appendQuery(floatControls);
+        appendQuery(subgroupControl);
+        appendQuery(executableProps);
         query(physical, &available);
         std::vector<const char*> missingFeatures;
         const auto requireFeature = [&missingFeatures](VkBool32 availableFeature, const char* name)
@@ -423,6 +439,37 @@ class DeviceFeatures
         {
             requiredExtensions.insert(requiredExtensions.end(), { VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
                                                                   VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME });
+        }
+        // Optional wave64 path: enable subgroupSizeControl when the physical
+        // device supports it. On API < 1.3 this needs
+        // VK_EXT_subgroup_size_control, enabled only when present. Never
+        // throws: pipeline creation falls back when the feature is missing.
+        bool enableSubgroupSizeControl = subgroupControl.subgroupSizeControl == VK_TRUE;
+        if (enableSubgroupSizeControl && !core13)
+        {
+            const bool hasSubgroupSizeControl =
+                std::any_of(availableExtensions.begin(), availableExtensions.end(), [](const auto& e) {
+                    return std::strcmp(e.extensionName, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) == 0;
+                });
+            if (hasSubgroupSizeControl)
+                extensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+            else
+                enableSubgroupSizeControl = false;
+        }
+        // Optional pipeline-statistics capture (diagnostic only, env-gated).
+        // Fails closed when requested but unsupported; untouched otherwise.
+        const bool captureStats = std::getenv("FSR4_VK_CAPTURE_STATS") != nullptr;
+        bool enableExecutableProps = false;
+        if (captureStats)
+        {
+            const bool hasExecutableProps =
+                std::any_of(availableExtensions.begin(), availableExtensions.end(), [](const auto& e) {
+                    return std::strcmp(e.extensionName, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME) == 0;
+                });
+            if (!hasExecutableProps || executableProps.pipelineExecutableInfo != VK_TRUE)
+                throw std::runtime_error("FSR4_VK_CAPTURE_STATS requested but VK_KHR_pipeline_executable_properties is unsupported");
+            extensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+            enableExecutableProps = true;
         }
         std::vector<const char*> missingExtensions;
         for (auto* required : requiredExtensions)
@@ -580,6 +627,17 @@ class DeviceFeatures
         ensure<VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR>(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR)
             ->computeDerivativeGroupLinear = VK_TRUE;
+        // Optional wave64 path (see query above). Completing the contract on
+        // our owned copy only; the application's chain is never modified.
+        if (enableSubgroupSizeControl)
+            ensure<VkPhysicalDeviceSubgroupSizeControlFeatures>(
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES)
+                ->subgroupSizeControl = VK_TRUE;
+        // Optional pipeline-statistics capture (see above). Owned copy only.
+        if (enableExecutableProps)
+            ensure<VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR>(
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR)
+                ->pipelineExecutableInfo = VK_TRUE;
         if (nativeMixedDot)
             ensure<VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>(
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE)

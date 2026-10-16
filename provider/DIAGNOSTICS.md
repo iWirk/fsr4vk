@@ -37,6 +37,17 @@ Successful-frame metadata is not written each frame. Detailed strings are built
 only for failed resource validation; the successful resource-check path keeps
 the same format/type/dimension/state acceptance rules.
 
+## Pipeline statistics capture (diagnostic only, off by default)
+
+Setting `FSR4_VK_CAPTURE_STATS=1` negotiates
+`VK_KHR_pipeline_executable_properties` (fails closed when unsupported) and
+records per-pipeline executable statistics (`numUsedVgprs`, `numUsedSgprs`,
+LDS/scratch sizes, …) as `exec_stats` log lines at creation time. Setting
+`FSR4_VK_CAPTURE_ISA_DIR=<dir>` additionally writes each pipeline's text ISA
+to that directory. Capture flags change pipeline-cache keys, so seeded caches
+miss while set. Never enabled unless requested; production behavior is
+byte-identical with the variables unset.
+
 ## Enshrouded evidence and limits
 
 The supplied `fsr4vk-provider-308-2.log` contains two depth rejections and one

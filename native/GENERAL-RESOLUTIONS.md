@@ -8,7 +8,7 @@ retired fixed 720p -> 1080p Quality-only runtime path.
 - Input and output dimensions are integers, at least 64 on each axis.
 - Output is at most 3840x2160; input must not exceed output on either axis.
 - Equal input/output is supported (FSRAA). Non-preset and odd dimensions are
-  accepted. 4.0.2 pads internal extents; 4.1.1 pads neural capacity but preserves
+  accepted. 4.1.1 pads neural capacity but preserves
   exact image dimensions. Odd final borders require the separate oracle gate
   described in the audit; do not infer coverage from a zero-cleared smoke output.
 - Capacity-specific shader bundles cover up to 1920x1080 and up to 3840x2160.
@@ -59,7 +59,7 @@ A non-embedded DLL searches for
 Model/shader assets belong to this private research archive, not the independent
 clean provider framework or the public OptiScaler fork.
 
-This is the 4.0.2 bundle layout. 4.1.1 additionally uses `fsr411/general` and
+This was the retired 4.0.2 bundle layout. 4.1.1 uses `fsr411/general` and
 its color variants, with 28 passes. See the generated embedding manifest for
 current payload/resource counts rather than historical counts in validation notes.
 

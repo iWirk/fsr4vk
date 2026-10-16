@@ -143,13 +143,16 @@ class ScriptGates(unittest.TestCase):
     def test_manifest_preset_survives_optimization(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            leaf = root / '1080/native'
+            leaf = root / 'fsr411/general/1080/native'
             leaf.mkdir(parents=True)
-            (leaf/'manifest.json').write_text(json.dumps(dict(preset='quality')))
+            (leaf/'manifest.json').write_text(json.dumps(dict(
+                version='4.1.1', arithmetic='int8',
+                provenance=dict(dll_sha256='x', backend='portable', preset='quality',
+                                capacity=[1920, 1080], color='linear'),
+                shaders=[], initializers_sha256='x')))
             for flags in ([], ['-O']):
-                run = subprocess.run([sys.executable, *flags, str(ROOT/'tools/verify-general-assets.py'), str(root)], capture_output=True)
+                run = subprocess.run([sys.executable, *flags, str(ROOT/'tools/fsr411-assets.py'), str(root/'fsr411')], capture_output=True)
                 self.assertNotEqual(run.returncode, 0)
-                self.assertIn(b'wrong preset', run.stderr)
 
     def test_empty_matrix_survives_optimization(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -70,36 +70,34 @@ int main(int argc, char** argv) {
     versions.outputCount = &count;
     const auto countResult = query(nullptr, &versions.header);
     std::cout << "count_result=" << countResult << " count=" << count << '\n';
-    if (countResult != FFX_API_RETURN_OK || count != 3) return 1;
+    if (countResult != FFX_API_RETURN_OK || count != 2) return 1;
 
     constexpr std::uint64_t canary = 0xa5a5a5a5a5a5a5a5ull;
-    std::uint64_t boundedIds[3]{0,canary,canary};
+    std::uint64_t boundedIds[2]{0,canary};
     const char* sentinel = "untouched";
-    const char* boundedNames[3]{nullptr,sentinel,sentinel};
+    const char* boundedNames[2]{nullptr,sentinel};
     versions.versionIds = boundedIds;
     versions.versionNames = boundedNames;
     count = 1; // A bounded query must not write further versions here.
     const auto listResult = query(nullptr, &versions.header);
-    if (boundedIds[1]!=canary || boundedNames[1]!=sentinel ||
-        boundedIds[2]!=canary || boundedNames[2]!=sentinel || count!=3) return 1;
+    if (boundedIds[1]!=canary || boundedNames[1]!=sentinel || count!=2) return 1;
     const auto id = boundedIds[0];
     const auto name = boundedNames[0];
     std::cout << std::hex << "version_id=0x" << id << std::dec
               << " version_name=" << (name ? name : "<null>")
               << " list_result=" << listResult << '\n';
     if (listResult != FFX_API_RETURN_OK || id == 0 || !name) return 1;
-    std::uint64_t ids[3]{};
-    const char* names[3]{};
+    std::uint64_t ids[2]{};
+    const char* names[2]{};
     versions.versionIds = ids;
     versions.versionNames = names;
-    count = 3;
-    if (query(nullptr, &versions.header) != FFX_API_RETURN_OK || count != 3 ||
-        ids[0] != id || ids[1] == ids[0] || ids[2] == ids[0] || ids[2] == ids[1] ||
-        !names[0] || !names[1] || !names[2] ||
-        std::string("FSR")+names[0] != "FSR 4.0.2 VK INT8" ||
-        std::string("FSR")+names[1] != "FSR 4.1.1 VK INT8" ||
-        std::string("FSR")+names[2] != "FSR 4.1.1 VK INT8 Perf") return 1;
-    std::cout << "selector_names=FSR" << names[0] << ",FSR" << names[1] << ",FSR" << names[2] << '\n';
+    count = 2;
+    if (query(nullptr, &versions.header) != FFX_API_RETURN_OK || count != 2 ||
+        ids[0] != id || ids[1] == ids[0] ||
+        !names[0] || !names[1] ||
+        std::string("FSR")+names[0] != "FSR 4.1.1 VK INT8" ||
+        std::string("FSR")+names[1] != "FSR 4.1.1 VK INT8 Perf") return 1;
+    std::cout << "selector_names=FSR" << names[0] << ",FSR" << names[1] << '\n';
     std::cout << "version_list=all-models bounded_query=passed\n";
 
     uint32_t rw=0, rh=0;
@@ -150,9 +148,6 @@ int main(int argc, char** argv) {
     overrideVersion.versionId = ids[1];
     const auto newVersionResult = create(&providerContext, &createDesc.header, nullptr);
     if (newVersionResult != FFX_API_RETURN_ERROR_RUNTIME_ERROR || providerContext) return 1;
-    overrideVersion.versionId = ids[2];
-    const auto perfVersionResult = create(&providerContext, &createDesc.header, nullptr);
-    if (perfVersionResult != FFX_API_RETURN_ERROR_RUNTIME_ERROR || providerContext) return 1;
 
     constexpr std::uint64_t fsr314CompatibilityId =
         (0xF5A5CA1Eull << 32) | ((3ull << 22) | (1ull << 12) | 4ull);

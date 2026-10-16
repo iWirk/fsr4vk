@@ -12,7 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
     parser.add_argument('stage', type=Path, help='existing empty directory made by mktemp')
-    parser.add_argument('--assets', type=Path, help='general/ directory and its sibling bundles')
+    parser.add_argument('--assets', type=Path, help='fsr411/ directory with general/ and colors/ children')
     parser.add_argument('--vulkan-include', type=Path, help='copy SDK include files instead of compiling against live headers')
     parser.add_argument('--tool', action='append', default=[], help='record name=executable version and binary hash; not a hermetic sysroot')
     args = parser.parse_args()
@@ -21,9 +21,15 @@ def main():
     if not stage.is_dir() or any(stage.iterdir()):
         parser.error('stage must be an existing empty directory')
     paths = []
-    for directory in ('native', 'provider', 'probes', 'third_party/zstd',
-                      'amd-fidelityfx-sdk/Kits/FidelityFX/api/include',
-                      'amd-fidelityfx-sdk/Kits/FidelityFX/upscalers/include', 'tools'):
+    directories = ['native', 'provider', 'probes', 'third_party/zstd',
+                   'amd-fidelityfx-sdk/Kits/FidelityFX/api/include',
+                   'amd-fidelityfx-sdk/Kits/FidelityFX/upscalers/include', 'tools']
+    # The frozen 4.1.1 variant step replays the pinned transform scripts via
+    # its REF_DEFAULT (stage/references/...). Freeze them so the stage is
+    # self-contained and hash-bound instead of depending on the live checkout.
+    if (root/'references'/'fsr4-shader-performance-overrides'/'tools').is_dir():
+        directories.append('references/fsr4-shader-performance-overrides/tools')
+    for directory in directories:
         base = root/directory
         paths.extend(path for path in base.rglob('*') if path.is_file() and
                      (path.suffix in ('.cpp', '.hpp', '.h', '.c', '.inl', '.py', '.comp', '.sh') or path.name == 'LICENSE') and
@@ -57,12 +63,12 @@ def main():
         report['toolchain'][name] = dict(path=str(binary), version=version.splitlines()[0],
                                        sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
     if args.assets:
-        asset_root = args.assets.resolve().parent
-        if args.assets.name != 'general':
-            parser.error('--assets must name general/ with portable/colors/fsr411 siblings')
-        for name in ('general', 'portable', 'colors', 'fsr411'):
+        asset_root = args.assets.resolve()
+        if args.assets.name != 'fsr411':
+            parser.error('--assets must name fsr411/ with general/ and colors/ children')
+        for name in ('general', 'colors'):
             # A copied symlink would keep a live dependency outside the stage.
-            shutil.copytree(asset_root/name, stage/'assets'/name, symlinks=False)
+            shutil.copytree(asset_root/name, stage/'assets'/'fsr411'/name, symlinks=False)
         for path in sorted((stage/'assets').rglob('*')):
             if path.is_file():
                 report['files'][path.relative_to(stage).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()

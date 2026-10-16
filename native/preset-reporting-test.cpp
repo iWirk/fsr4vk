@@ -73,7 +73,7 @@ int main() {
     // Regression for the Endfield flags in the Windows field log: inverted
     // depth + HDR + external exposure must create without allocating GPU work.
     const auto test_assets=std::filesystem::current_path()/"build/preset-reporting-test/context-assets";
-    std::filesystem::create_directories(test_assets/"general");
+    std::filesystem::create_directories(test_assets/"fsr411"/"general");
     const auto test_assets_narrow = test_assets.string();
     setenv("FSR4_VK_ASSET_ROOT",test_assets_narrow.c_str(),1);
     CreateBackendVkDesc backend{{3,nullptr},reinterpret_cast<VkDevice>(1),
@@ -186,7 +186,7 @@ int main() {
     ffxQueryGetProviderVersion version{};
     version.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     assert(ffxQuery(&context, &version.header) == FFX_API_RETURN_OK);
-    assert(version.versionId == kVersionId);
+    assert(version.versionId == kVersion411Id);
     const auto mask = FFXVkPresetReporting::SupportedPresets(ffxQuery, &context);
     assert(mask == 0x3fu);
     assert(!FFXVkPresetReporting::SupportedPresets(mockCapabilities, &context));
