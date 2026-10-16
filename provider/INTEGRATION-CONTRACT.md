@@ -101,6 +101,13 @@ cache (status quo). Capture via `FSR4_VK_PIPELINE_CACHE_DUMP=<out>` in
 `pipeline-resource-probe` on the same GPU/driver; blobs are not portable across
 devices/drivers.
 
+Advertised upscaler versions: `4.0.2`, `4.1.1`, and opt-in `4.1.1 Perf`
+(same 4.1.1 model with rewritten shaders, generated at build time by
+`tools/generate-fsr411-variant.py` from frozen 4.1.1 assets; see its provenance
+record and the validation report). Order is stable (`[0]=4.0.2, [1]=4.1.1,
+[2]=Perf`) so saved indices keep their meanings; unknown future indices clamp
+to `4.0.2` on the host side as before.
+
 `FSR4_VK_PROFILE_PATH` is now a filename prefix, not an overwritable final-frame
 CSV. Each core/session writes `<prefix>.<identity>.jsonl`, with per-frame model,
 backend, preset, color, dimensions, queue family, timestamp period/valid bits,

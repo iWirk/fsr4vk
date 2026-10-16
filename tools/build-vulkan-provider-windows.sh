@@ -27,6 +27,15 @@ frozen_assets=""
 if [[ -n "${FSR4_EMBED_ASSETS:-}" ]]; then frozen_assets="$stage_dir/assets/general"; fi
 build_dir="$stage_dir/artifacts"
 mkdir "$build_dir"
+# Opt-in 4.1.1 rewritten-shader variant (3rd selector entry). Generated from
+# frozen assets (deterministic, hash-recorded) so no variant payloads live in
+# git. Set FSR4_VARIANT_PERF=0 to skip for iteration speed.
+variant_root=""
+if [[ -n "${FSR4_EMBED_ASSETS:-}" && "${FSR4_VARIANT_PERF:-1}" != "0" ]]; then
+    python3 "$source_root/tools/generate-fsr411-variant.py" "$stage_dir/assets" \
+        "$stage_dir" --record-into "$stage_dir/frozen-inputs.json"
+    variant_root="$stage_dir"
+fi
 vulkan_library=(-lvulkan-1)
 if [[ -n "${FSR4_VULKAN_IMPORT_LIBRARY:-}" ]]; then
     vulkan_library=("$FSR4_VULKAN_IMPORT_LIBRARY")
@@ -40,7 +49,9 @@ build_provider() {
     fi
     if [[ -n "${FSR4_EMBED_ASSETS:-}" ]]; then
         local embed_dir="$build_dir/$mode-embedded"
-        python3 "$source_root/tools/embed-general-assets.py" "$frozen_assets" "$embed_dir" --compression "$compression"
+        local -a variant_args=()
+        if [[ -n "$variant_root" ]]; then variant_args=(--variant "$variant_root"); fi
+        python3 "$source_root/tools/embed-general-assets.py" "$frozen_assets" "$embed_dir" --compression "$compression" "${variant_args[@]+${variant_args[@]}}"
         x86_64-w64-mingw32-windres "$embed_dir/embedded-assets.rc" "$build_dir/$mode-assets.o"
         embedded_args=(-DFSR4_EMBEDDED_ASSETS -I"$embed_dir" "$build_dir/$mode-assets.o")
         if [[ "$mode" == release ]]; then

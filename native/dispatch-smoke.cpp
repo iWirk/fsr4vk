@@ -1426,7 +1426,7 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("unexpected benchmark core/query count");
             std::array<uint64_t,2> whole{};
             std::array<uint64_t,56> times{};
-            const auto pass_count=provider->version==kVersion411Id ? 28u : 15u;
+            const auto pass_count=is411family(provider->version) ? 28u : 15u;
             check(vkGetQueryPoolResults(device,benchmark_queries,0,2,sizeof(whole),whole.data(),sizeof(uint64_t),VK_QUERY_RESULT_64_BIT),"context timestamps");
             check(vkGetQueryPoolResults(device,tracked_pass_queries,provider->active_core->last_profile_query_base(),
                 pass_count*2,sizeof(times),times.data(),sizeof(uint64_t),VK_QUERY_RESULT_64_BIT),"pass timestamps");
@@ -1485,10 +1485,11 @@ int main(int argc, char** argv) {
                 ffxOverrideVersion model_version{};
                 model_version.header.type=FFX_API_DESC_TYPE_OVERRIDE_VERSION;
                 if (const char* version=std::getenv("FSR4_TEST_VERSION")) {
-                    if(std::string(version)!="4.1.1" && std::string(version)!="4.0.2")
-                        throw std::invalid_argument("FSR4_TEST_VERSION must be 4.0.2 or 4.1.1");
+                    const std::string want = version;
+                    if(want!="4.1.1" && want!="4.0.2" && want!="4.1.1-perf")
+                        throw std::invalid_argument("FSR4_TEST_VERSION must be 4.0.2, 4.1.1 or 4.1.1-perf");
                     model_version.versionId=(0xF5A5CA1Eull<<32) | (4ull<<22) |
-                        (std::string(version)=="4.1.1" ? (1ull<<12)|1ull : 2ull);
+                        (want=="4.1.1-perf" ? (1ull<<12)|2ull : want=="4.1.1" ? (1ull<<12)|1ull : 2ull);
                     model_version.header.pNext=&feature_snapshot.header;
                     backend.header.pNext=&model_version.header;
                 }
@@ -1538,8 +1539,10 @@ int main(int argc, char** argv) {
                 VK_NULL_HANDLE, 0, kOutputWidth, kOutputHeight,
                 command_pipeline_barrier2, promoted_dispatch.cmd_write_timestamp2);
         }
-        std::cout << "dispatch=quality-frame passes=" << (std::getenv("FSR4_TEST_VERSION") && std::string(std::getenv("FSR4_TEST_VERSION"))=="4.1.1" ? 28 : kPasses.size() + (nms_inputs ? 1 : 0))
-                  << " status=recorded\n";
+            const char* want_version = std::getenv("FSR4_TEST_VERSION");
+            const bool want411 = want_version && (std::string(want_version)=="4.1.1" || std::string(want_version)=="4.1.1-perf");
+            std::cout << "dispatch=quality-frame passes=" << (want411 ? 28 : kPasses.size() + (nms_inputs ? 1 : 0))
+                      << " status=recorded\n";
 
         const std::array<const Image*, 3> inspected_images{{
             &output, &history, &reprojected}};

@@ -47,19 +47,22 @@ provider-owned allocations (~207MB).
   spoof-aware `context api/queue` logging; opt-in pipeline-cache seed support
   (`<bundle>/pipeline_cache.portable.bin`, `FSR4_VK_PIPELINE_CACHE_PATH`,
   UUID-validated, safe empty fallback) + probe capture hook.
-- OptiScaler (submodule): `PreferFsr411Upscaler` quirk for `enshrouded.exe`
-  (unset `UpscalerIndex` only, still overridable); skip spoofing during Vulkan
-  dispatch (matches `InitFFX`; steady-state no-op).
+- OptiScaler (submodule): `PreferFsr411PerfUpscaler` quirk for `enshrouded.exe`
+  (unset `UpscalerIndex` only, still overridable; picks the `4.1.1 Perf`
+  variant); skip spoofing during Vulkan dispatch (matches `InitFFX`;
+  steady-state no-op).
 - Tests: Enshrouded device-chain regression, smoke/probe env gates
   (`FSR4_TEST_VULKAN_1_2`, Enshrouded-device emulation, `NO_CAPTURE`,
   force-robust), Windows `_WIN32 setenv` shims.
 
-## Workaround (validated in-game): default 4.1.1 for Enshrouded
+## Workaround (validated in-game): default 4.1.1 Perf for Enshrouded
 
 4.1.1 is disjoint shaders (no shared `model_6`), always portable, smaller hot
 set; `3840x1600` is even/even so the known odd-edge limitation does not apply.
 Validated natively (28 passes) and in-game via `UpscalerIndex=1`, then made the
-quirk default. 4.0.2 remains selectable.
+quirk default; later moved to the `4.1.1 Perf` variant (index 2, byte-identical
+pixels, ~3.7% faster at 3840x1600) once it validated. Stock 4.1.1 and 4.0.2
+remain selectable.
 
 ## Decision: keep 4.0.2, no full strip
 

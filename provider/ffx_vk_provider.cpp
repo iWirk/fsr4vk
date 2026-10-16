@@ -61,6 +61,12 @@ constexpr std::uint64_t kVersion411Id =
 // Keep the leading space here; version IDs, not labels, select the model.
 constexpr const char* kVersionName = " 4.0.2 VK INT8";
 constexpr const char* kVersion411Name = " 4.1.1 VK INT8";
+// Opt-in rewritten-shader variant of 4.1.1 (same model, same 28-pass layout).
+// Patch 2 is a marker only: parse_version() still reads 4.1.1 from the name,
+// which is authoritative; IDs only select the model.
+constexpr std::uint64_t kVersion411PerfId =
+    (0xF5A5CA1Eull << 32) | ((4ull << 22) | (1ull << 12) | 2ull);
+constexpr const char* kVersion411PerfName = " 4.1.1 VK INT8 Perf";
 
 struct ProviderContext {
     // CPU API calls serialize; GPU submission/destruction remain host contracts.
@@ -236,6 +242,16 @@ std::uint64_t findVersion(const ffxApiHeader* header) {
     return 0;
 }
 
+constexpr bool is411family(std::uint64_t version) noexcept {
+    return version == kVersion411Id || version == kVersion411PerfId;
+}
+
+const char* versionName(std::uint64_t version) noexcept {
+    if (version == kVersion411PerfId) return kVersion411PerfName;
+    if (version == kVersion411Id) return kVersion411Name;
+    return kVersionName;
+}
+
 float upscaleRatio(std::uint32_t qualityMode) {
     constexpr float ratios[] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f};
     return qualityMode < std::size(ratios) ? ratios[qualityMode] : 0.0f;
@@ -348,7 +364,7 @@ ffxReturnCode_t queryUpscale(ffxContext* context, ffxQueryDescHeader* header) {
         auto* query = reinterpret_cast<ffxQueryGetProviderVersion*>(header);
         if (!context || !*context) return FFX_API_RETURN_ERROR_PARAMETER;
         query->versionId = static_cast<ProviderContext*>(*context)->version;
-        query->versionName = query->versionId==kVersion411Id ? kVersion411Name : kVersionName;
+        query->versionName = versionName(query->versionId);
         return FFX_API_RETURN_OK;
     }
     case FFX_API_QUERY_DESC_TYPE_UPSCALE_GETUPSCALERATIOFROMQUALITYMODE: {
@@ -447,6 +463,7 @@ static ffxReturnCode_t createContextImpl(
     // loading amd_fidelityfx_vk.dll pin the stock FSR 3.1.4 provider ID
     // instead; accept that ABI-compatible selection as a drop-in alias.
     if (version != 0 && version != kVersionId && version != kVersion411Id &&
+        version != kVersion411PerfId &&
         version != kFsr314CompatibilityVersionId) {
         return FFX_API_RETURN_NO_PROVIDER;
     }
@@ -461,7 +478,8 @@ static ffxReturnCode_t createContextImpl(
     ProviderContext* provider=nullptr;
     try { provider=new (storage) ProviderContext{}; }
     catch (...) { deallocate(callbacks,storage); throw; }
-    provider->version = version==kVersion411Id ? kVersion411Id : kVersionId;
+    provider->version = version==kVersion411PerfId ? kVersion411PerfId :
+        is411family(version) ? kVersion411Id : kVersionId;
     provider->device = backend->device;
     provider->physicalDevice = backend->physicalDevice;
     provider->getDeviceProcAddr = backend->getDeviceProcAddr;
@@ -482,7 +500,8 @@ static ffxReturnCode_t createContextImpl(
     provider->maxUpscaleSize = create->maxUpscaleSize;
     provider->message = create->fpMessage;
     try {
-        const auto assets=version==kVersion411Id ? asset_root()/"fsr411" : asset_root();
+        const auto assets=version==kVersion411PerfId ? asset_root()/"fsr411-variant" :
+            version==kVersion411Id ? asset_root()/"fsr411" : asset_root();
         provider->assets=assets;
         const bool embedded=fsr4assets::is_embedded(assets);
         if (!embedded) {
@@ -500,7 +519,7 @@ static ffxReturnCode_t createContextImpl(
                    std::to_string(create->maxUpscaleSize.width)+"x"+
                    std::to_string(create->maxUpscaleSize.height));
         diagnostic(*provider,std::string("version=")+
-                   (provider->version==kVersion411Id ? kVersion411Name : kVersionName));
+                   versionName(provider->version));
         const uint32_t required_flags = FFX_UPSCALE_ENABLE_DEPTH_INVERTED;
         const uint32_t permutation = create->flags & ~(FFX_UPSCALE_ENABLE_DEBUG_CHECKING | FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE |
                                                         FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE |
@@ -603,7 +622,11 @@ static ffxReturnCode_t queryImpl(
             if (query->versionIds) query->versionIds[1] = kVersion411Id;
             if (query->versionNames) query->versionNames[1] = kVersion411Name;
         }
-        *query->outputCount = 2;
+        if (capacity > 2) {
+            if (query->versionIds) query->versionIds[2] = kVersion411PerfId;
+            if (query->versionNames) query->versionNames[2] = kVersion411PerfName;
+        }
+        *query->outputCount = 3;
         return FFX_API_RETURN_OK;
     }
     return queryUpscale(context, header);
@@ -831,7 +854,7 @@ static ffxReturnCode_t dispatchImpl(
                 provider->maxRenderSize.width,provider->maxRenderSize.height,
                 provider->maxUpscaleSize.width,provider->maxUpscaleSize.height,
                 provider->apiVersion,
-                (provider->flags & FFX_UPSCALE_ENABLE_AUTO_EXPOSURE)==0,provider->version==kVersion411Id,
+                (provider->flags & FFX_UPSCALE_ENABLE_AUTO_EXPOSURE)==0,is411family(provider->version),
                 provider->robust_buffer_access,provider->native_mixed_dot_enabled,
                 provider->diagnostic_path.empty() ? std::function<void(const std::string&)>{} :
                     std::function<void(const std::string&)>{[path=provider->diagnostic_path,id=provider->diagnostic_id](const auto& text){write_diagnostic(path,id,text);}},
@@ -862,7 +885,7 @@ static ffxReturnCode_t dispatchImpl(
                                provider->last_output_height!=oh;
         stage="dispatch recording";
         fsr4core::OptimizedConstants c{};
-        const bool fsr411=provider->version==kVersion411Id;
+        const bool fsr411=is411family(provider->version);
         // Unlike 4.0.2, 4.1.1 keeps image sampling at the exact output size.
         // Its recorder separately pads the neural tensors to eight pixels.
         const auto padded_w=fsr411 ? ow : fsr4::round_up(ow,8);

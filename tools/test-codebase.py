@@ -58,6 +58,12 @@ def main():
     if not args.no_sanitizers:
         common += ['-fsanitize=address,undefined,float-cast-overflow', '-fno-sanitize-recover=all']
     linker = ['-Wl,-dead_strip' if platform.system() == 'Darwin' else '-Wl,--gc-sections']
+    # preset-reporting links the provider translation unit, which references
+    # Vulkan loader entry points. Linux CI provides them; on Windows, bind the
+    # SDK import library explicitly when present (no-op elsewhere).
+    vk_import = args.vulkan_include.parent / 'Lib' / 'vulkan-1.lib'
+    if platform.system() == 'Windows' and vk_import.is_file():
+        linker = linker + [str(vk_import)]
     try:
         for name in tests:
             binary = output/name

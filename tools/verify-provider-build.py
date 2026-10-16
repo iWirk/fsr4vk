@@ -21,6 +21,10 @@ def main():
     for path, digest in provenance['files'].items():
         if sha((args.stage/path).read_bytes()) != digest:
             raise ValueError(f'frozen input changed during build: {path}')
+    for variant, record in provenance.get('variant', {}).items():
+        for path, digest in record.get('files', {}).items():
+            if sha((args.stage/path).read_bytes()) != digest:
+                raise ValueError(f'variant input changed during build: {path}')
     expected = {'ffxCreateContext', 'ffxDestroyContext', 'ffxConfigure', 'ffxQuery', 'ffxDispatch'}
     identities = []
     binaries = {}
@@ -68,7 +72,13 @@ def main():
     alias = (args.artifacts/'amd_fidelityfx_vk.dll').read_bytes()
     if sha(alias) != binaries['amd_fidelityfx_upscaler_vk.dll']['sha256']:
         raise ValueError('stock-name alias differs')
-    provenance.update(binaries=binaries, models=['4.0.2', '4.1.1'], source_stage=str(args.stage.resolve()))
+    models = ['4.0.2', '4.1.1']
+    release_manifest = args.artifacts/'release-embedded'/'embedded-assets.json'
+    if release_manifest.exists() and any(
+            e['path'].startswith('fsr411-variant/') for e in
+            json.loads(release_manifest.read_text())['entries']):
+        models.append('4.1.1-perf')
+    provenance.update(binaries=binaries, models=models, source_stage=str(args.stage.resolve()))
     with (args.artifacts/'build-provenance.json').open('x') as stream:
         stream.write(json.dumps(provenance, indent=2, sort_keys=True)+'\n')
     print('PASS: frozen inputs, AMD64 exports, asset identities and normal/debug modes')

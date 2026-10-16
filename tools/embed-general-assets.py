@@ -23,6 +23,9 @@ p.add_argument('general', type=Path)
 p.add_argument('output', type=Path)
 p.add_argument('--compression', choices=('none','zstd'), default='none')
 p.add_argument('--zstd', default=os.environ.get('ZSTD','zstd'))
+p.add_argument('--variant', type=Path, default=None,
+               help='generated fsr411-variant tree root (contains fsr411-variant/); '
+                    'packed under fsr411-variant/ keys after shape validation')
 a = p.parse_args()
 subprocess.run([sys.executable, str(Path(__file__).with_name('verify-general-assets.py')), str(a.general)], check=True)
 portable_root = a.general.parent/'portable'
@@ -80,6 +83,33 @@ fsr411_spec.loader.exec_module(fsr411_assets)
 fsr411_root = a.general.parent/'fsr411'
 for path in fsr411_assets.verify(fsr411_root):
     add_resource(path, 'fsr411/'+path.relative_to(fsr411_root).as_posix(), path.read_bytes())
+if a.variant is not None:
+    variant_root = a.variant/'fsr411-variant'
+    if not (variant_root/'general').is_dir():
+        raise ValueError('variant root lacks fsr411-variant/general')
+    # Pack every payload file the variant tree carries (mirrors base layout:
+    # full general bundles + colors pass-01/pass-27 overlays). Content was
+    # assembled + validated at generation time; manifests carry patched hashes
+    # and are re-checked here.
+    variant_files = sorted((variant_root/'general').rglob('*.spv')) + \
+        sorted((variant_root/'general').rglob('*.bin'))
+    if (variant_root/'colors').is_dir():
+        for colors_manifest in sorted((variant_root/'colors').glob('*/*/*/manifest.json')):
+            for entry in json.loads(colors_manifest.read_text()).get('shaders', []):
+                if entry['file'] in ('pass-01.spv', 'pass-27.spv'):
+                    variant_files.append(colors_manifest.parent/entry['file'])
+    for target in variant_files:
+        if not target.is_file():
+            raise ValueError(f'variant bundle incomplete: {target}')
+        key = 'fsr411-variant/'+target.relative_to(variant_root).as_posix()
+        add_resource(target, key, target.read_bytes())
+    for manifest in sorted(variant_root.rglob('manifest.json')):
+        data = json.loads(manifest.read_text())
+        for entry in data.get('shaders', []):
+            target = manifest.parent/entry['file']
+            if target.is_file() and \
+                    hashlib.sha256(target.read_bytes()).hexdigest() != entry.get('sha256'):
+                raise ValueError(f'variant manifest mismatch: {target}')
 (a.output/'embedded-assets.rc').write_text('\n'.join(f'{rid} RCDATA {json.dumps(str(path))}' for rid,path,*_ in resources.values())+'\n')
 (a.output/'embedded-asset-index.hpp').write_text(
     '#pragma once\nnamespace fsr4assets {\nstruct EmbeddedEntry { const char* path; unsigned id; unsigned size; unsigned stored_size; bool compressed; };\n'
