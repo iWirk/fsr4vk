@@ -532,8 +532,9 @@ int main(int argc, char** argv) {
         check(vkCreateSampler(device, &sampler_info, nullptr, &sampler),
               "vkCreateSampler");
 
-        const VkDescriptorBindingFlags variable_descriptor_count =
-            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+        // GH issue #1 parity with quality-context.hpp: AMD Windows reports a
+        // smaller layout size for VARIABLE_DESCRIPTOR_COUNT_BIT heaps.
+        const VkDescriptorBindingFlags variable_descriptor_count = 0;
         const std::array<VkDescriptorType, 6> mutable_types{{
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,

@@ -531,7 +531,8 @@ int main(int argc, char** argv) {
         application.pApplicationName = "fsr4-native-dispatch-smoke";
         application.applicationVersion = VK_MAKE_VERSION(0, 2, 0);
         const bool vulkan11 = std::getenv("FSR4_TEST_VULKAN_1_1") != nullptr;
-        application.apiVersion = vulkan11 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_3;
+        const bool vulkan12 = std::getenv("FSR4_TEST_VULKAN_1_2") != nullptr;
+        application.apiVersion = vulkan11 ? VK_API_VERSION_1_1 : vulkan12 ? VK_API_VERSION_1_2 : VK_API_VERSION_1_3;
         VkInstanceCreateInfo instance_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         instance_info.pApplicationInfo = &application;
         check(vkCreateInstance(&instance_info, nullptr, &instance), "vkCreateInstance");
@@ -565,6 +566,102 @@ int main(int argc, char** argv) {
         VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         device_info.queueCreateInfoCount = 1;
         device_info.pQueueCreateInfos = &queue_info;
+        // Game-like Enshrouded device (env-gated, no spoof, no game): typed
+        // 17-node chain in log order + 30 game extensions. Zero-init payloads;
+        // DeviceFeatures enables required bits. Isolates device enablement.
+        VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR game_derivatives{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR game_coop{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+        VkPhysicalDeviceDescriptorBufferFeaturesEXT game_desc_buf{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT};
+        VkPhysicalDeviceSubgroupSizeControlFeatures game_subgroup{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
+        VkPhysicalDeviceSynchronization2Features game_sync2{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES};
+        VkPhysicalDeviceFeatures2 game_features2{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        VkPhysicalDeviceVulkan11Features game_v11{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+        VkPhysicalDeviceVulkan12Features game_v12{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+        VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures game_demote{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES};
+        VkPhysicalDeviceDynamicRenderingFeatures game_dyn{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
+        VkPhysicalDeviceMemoryPriorityFeaturesEXT game_mem_prio{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT};
+        VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT game_pageable{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT};
+        VkPhysicalDeviceImageRobustnessFeatures game_img_robust{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES};
+        VkPhysicalDeviceRobustness2FeaturesEXT game_robust2{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+        VkPhysicalDeviceMeshShaderFeaturesEXT game_mesh{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR game_as{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+        VkPhysicalDeviceRayQueryFeaturesKHR game_ray{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+        const char* game_extensions[] = {
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_EXT_SHADER_DEMOTE_TO_HELPER_INVOCATION_EXTENSION_NAME,
+            VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME,
+            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+            VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME,
+            VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME,
+            VK_EXT_MEMORY_BUDGET_EXTENSION_NAME,
+            "VK_KHR_external_semaphore_win32",
+            "VK_KHR_external_memory_win32",
+            VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME,
+            VK_KHR_ROBUSTNESS_2_EXTENSION_NAME,
+            VK_EXT_MESH_SHADER_EXTENSION_NAME,
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+            VK_KHR_RAY_QUERY_EXTENSION_NAME,
+            VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+            VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+            VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+            VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+            VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME,
+            VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+            VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
+            VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME,
+            VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME,
+            VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+            VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,
+            VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME,
+            VK_KHR_SHADER_INTEGER_DOT_PRODUCT_EXTENSION_NAME,
+            VK_EXT_MUTABLE_DESCRIPTOR_TYPE_EXTENSION_NAME,
+            VK_AMD_ANTI_LAG_EXTENSION_NAME,
+        };
+        if (std::getenv("FSR4_TEST_ENSHROUDED_DEVICE")) {
+            VkBaseOutStructure* game_nodes[] = {
+                reinterpret_cast<VkBaseOutStructure*>(&game_derivatives),
+                reinterpret_cast<VkBaseOutStructure*>(&game_coop),
+                reinterpret_cast<VkBaseOutStructure*>(&game_desc_buf),
+                reinterpret_cast<VkBaseOutStructure*>(&game_subgroup),
+                reinterpret_cast<VkBaseOutStructure*>(&game_sync2),
+                reinterpret_cast<VkBaseOutStructure*>(&game_features2),
+                reinterpret_cast<VkBaseOutStructure*>(&game_v11),
+                reinterpret_cast<VkBaseOutStructure*>(&game_v12),
+                reinterpret_cast<VkBaseOutStructure*>(&game_demote),
+                reinterpret_cast<VkBaseOutStructure*>(&game_dyn),
+                reinterpret_cast<VkBaseOutStructure*>(&game_mem_prio),
+                reinterpret_cast<VkBaseOutStructure*>(&game_pageable),
+                reinterpret_cast<VkBaseOutStructure*>(&game_img_robust),
+                reinterpret_cast<VkBaseOutStructure*>(&game_robust2),
+                reinterpret_cast<VkBaseOutStructure*>(&game_mesh),
+                reinterpret_cast<VkBaseOutStructure*>(&game_as),
+                reinterpret_cast<VkBaseOutStructure*>(&game_ray),
+            };
+            for (size_t i = 0; i + 1 < std::size(game_nodes); ++i)
+                game_nodes[i]->pNext = game_nodes[i + 1];
+            device_info.pNext = game_nodes[0];
+            device_info.enabledExtensionCount = static_cast<uint32_t>(std::size(game_extensions));
+            device_info.ppEnabledExtensionNames = game_extensions;
+            std::cout << "enshrouded_device=emulated nodes=17 extensions=30\n";
+        }
         VkPhysicalDeviceBufferDeviceAddressFeaturesEXT legacy_buffer_address{
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_EXT};
         const char* legacy_buffer_address_extension =
@@ -614,8 +711,9 @@ int main(int argc, char** argv) {
         check(vkCreateSampler(device, &sampler_info, nullptr, &sampler),
               "vkCreateSampler");
 
-        const VkDescriptorBindingFlags variable_descriptor_count =
-            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+        // GH issue #1 parity with quality-context.hpp: AMD Windows reports a
+        // smaller layout size for VARIABLE_DESCRIPTOR_COUNT_BIT heaps.
+        const VkDescriptorBindingFlags variable_descriptor_count = 0;
         const std::array<VkDescriptorType, 6> mutable_types{{
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1374,10 +1472,15 @@ int main(int argc, char** argv) {
         };
         if (use_context) {
             if (use_provider) {
+                const bool force_robust = std::getenv("FSR4_TEST_FORCE_ROBUST") != nullptr;
+                const auto robust_for_snapshot = force_robust ? std::optional<bool>(true) : enabled_device.robust_buffer_access;
+                const uint32_t queue_for_snapshot = std::getenv("FSR4_TEST_UNKNOWN_QUEUE") ? UINT32_MAX : queue_family;
+                if (force_robust || std::getenv("FSR4_TEST_UNKNOWN_QUEUE"))
+                    std::cout << "enshrouded_snapshot robust=" << (robust_for_snapshot.has_value() ? std::to_string(int(*robust_for_snapshot)) : std::string("unknown")) << " queue=" << (queue_for_snapshot == UINT32_MAX ? std::string("unknown") : std::to_string(queue_for_snapshot)) << '\n';
                 CreateBackendVkDesc backend{{3,nullptr},device,physical_device,vkGetDeviceProcAddr};
                 Fsr4VkCreateDeviceFeatures feature_snapshot{{FSR4VK_CREATE_DESC_TYPE_DEVICE_FEATURES,nullptr},
-                    (enabled_device.robust_buffer_access ? FSR4VK_DEVICE_ROBUST_BUFFER_ACCESS : 0u) |
-                    (enabled_device.native_mixed_dot ? FSR4VK_DEVICE_NATIVE_MIXED_DOT : 0u),application.apiVersion,queue_family};
+                    (robust_for_snapshot && *robust_for_snapshot ? FSR4VK_DEVICE_ROBUST_BUFFER_ACCESS : 0u) |
+                    (enabled_device.native_mixed_dot ? FSR4VK_DEVICE_NATIVE_MIXED_DOT : 0u),application.apiVersion,queue_for_snapshot};
                 backend.header.pNext=&feature_snapshot.header;
                 ffxOverrideVersion model_version{};
                 model_version.header.type=FFX_API_DESC_TYPE_OVERRIDE_VERSION;
@@ -1392,12 +1495,21 @@ int main(int argc, char** argv) {
                 ffxCreateContextDescUpscale create{};
                 if(std::getenv("FSR4_TEST_RESOURCE_DIAGNOSTICS")) create.fpMessage=capture_diagnostic_test_message;
                 create.header={FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,&backend.header};
-                create.maxRenderSize={max_render_width,max_render_height}; create.maxUpscaleSize={kOutputWidth,kOutputHeight};
+                uint32_t create_max_w = max_render_width, create_max_h = max_render_height;
+                if (const char* mr = std::getenv("FSR4_TEST_MAX_RENDER_SIZE")) {
+                    unsigned x = 0, y = 0; char extra = 0;
+                    if (std::sscanf(mr, "%ux%u%c", &x, &y, &extra) != 2)
+                        throw std::invalid_argument("invalid FSR4_TEST_MAX_RENDER_SIZE");
+                    create_max_w = x; create_max_h = y;
+                    std::cout << "enshrouded_max_render=" << create_max_w << 'x' << create_max_h << '\n';
+                }
+                create.maxRenderSize={create_max_w,create_max_h}; create.maxUpscaleSize={kOutputWidth,kOutputHeight};
                 if (nms_inputs) create.flags=FFX_UPSCALE_ENABLE_DEPTH_INVERTED | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
                 if (external_exposure_test) create.flags &= ~FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
                 if (dynamic_resolution) create.flags |= FFX_UPSCALE_ENABLE_DYNAMIC_RESOLUTION;
                 if (color_mode=="nonlinear") create.flags |= FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
                 if (game_formats) create.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
+                if (std::getenv("FSR4_TEST_HDR")) create.flags |= FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE;
                 if(ffxCreateContext(&api_context,&create.header,nullptr)!=FFX_API_RETURN_OK)
                     throw std::runtime_error("provider creation failed");
                 ffxQueryGetProviderVersion selected{};

@@ -87,6 +87,36 @@ inline void check(VkResult result, const char* operation) {
     }
 }
 
+// Validate a VkPipelineCache blob before feeding it to vkCreatePipelineCache.
+// Layout is VkPipelineCacheHeaderVersionOne (32 bytes, little-endian on the
+// supported hosts): headerSize, headerVersion==1, vendorID, deviceID,
+// pipelineCacheUUID[16]. The driver ignores incompatible caches on its own;
+// this check only decides what gets logged. Never throws.
+inline bool validate_pipeline_cache_seed(VkPhysicalDevice physical,
+                                         const std::vector<std::uint8_t>& bytes,
+                                         std::string* detail=nullptr) {
+    try {
+        if (bytes.size() < 32) { if (detail) *detail = "too_small"; return false; }
+        uint32_t head[4] = {};
+        std::memcpy(head, bytes.data(), sizeof(head)); // LE host order on x86-64/AArch64-LE
+        if (head[0] < 32 || head[1] != VK_PIPELINE_CACHE_HEADER_VERSION_ONE) {
+            if (detail) *detail = "bad_header";
+            return false;
+        }
+        VkPhysicalDeviceProperties props {};
+        vkGetPhysicalDeviceProperties(physical, &props);
+        if (head[2] != props.vendorID || head[3] != props.deviceID) {
+            if (detail) *detail = "device_mismatch";
+            return false;
+        }
+        if (std::memcmp(bytes.data() + 16, props.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
+            if (detail) *detail = "uuid_mismatch";
+            return false;
+        }
+        return true;
+    } catch (...) { if (detail) *detail = "exception"; return false; }
+}
+
 inline std::vector<std::uint8_t> read_bytes(const fs::path& path) {
     if (fsr4assets::is_embedded(path)) return fsr4assets::read(path);
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
@@ -379,13 +409,17 @@ public:
 private:
     VkPipeline create_pipeline(const std::vector<std::uint32_t>& original,const char* name) {
         const auto started=std::chrono::steady_clock::now();
-        if(build_message) build_message(std::string("pipeline_enter name=")+name+" words="+std::to_string(original.size()));
+        if(build_message) build_message(std::string("pipeline_enter name=")+name+" words="+std::to_string(original.size())+
+            " bytes="+std::to_string(original.size()*sizeof(std::uint32_t)));
         const auto& code=original;
         VkShaderModuleCreateInfo module_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         module_info.codeSize=code.size()*sizeof(std::uint32_t);
         module_info.pCode=code.data();
         VkShaderModule module{};
-        check(vkCreateShaderModule(device,&module_info,nullptr,&module),name);
+        const auto module_result=vkCreateShaderModule(device,&module_info,nullptr,&module);
+        if(build_message) build_message(std::string("pipeline_module name=")+name+" result="+
+            fsr4vk::result_description(module_result));
+        check(module_result,name);
         adopt_resource(modules,module,[&](auto handle){vkDestroyShaderModule(device,handle,nullptr);});
         VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         stage.stage=VK_SHADER_STAGE_COMPUTE_BIT; stage.module=module; stage.pName="main";
@@ -394,6 +428,8 @@ private:
         info.stage=stage; info.layout=pipeline_layout;
         VkPipeline pipeline{};
         const auto result=vkCreateComputePipelines(device,pipeline_cache,1,&info,nullptr,&pipeline);
+        if(build_message) build_message(std::string("pipeline_compile name=")+name+" result="+
+            fsr4vk::result_description(result));
         if(pipeline) adopt_resource(owned_pipelines,pipeline,[&](auto handle){vkDestroyPipeline(device,handle,nullptr);});
         check(result,name);
         if(build_message) build_message(std::string("pipeline_complete name=")+name+" cpu_ms="+
@@ -423,6 +459,23 @@ public:
     const char* shader_backend() const {
         return native_mixed_dot ? "native-mixed-dot" : "portable-int8";
     }
+    // Capture the compiled pipeline cache (call after successful construction,
+    // before destruction, single-threaded). Returns empty when the driver
+    // reports zero size. Used to seed machines where cold compilation hangs.
+    std::vector<std::uint8_t> pipeline_cache_data() const {
+        std::vector<std::uint8_t> bytes;
+        if (!pipeline_cache) return bytes;
+        size_t size = 0;
+        if (vkGetPipelineCacheData(device, pipeline_cache, &size, nullptr) != VK_SUCCESS ||
+            !size || size > 64u*1024u*1024u)
+            return bytes;
+        bytes.resize(size);
+        size_t written = size;
+        if (vkGetPipelineCacheData(device, pipeline_cache, &written, bytes.data()) != VK_SUCCESS)
+            return std::vector<std::uint8_t>{};
+        bytes.resize(written);
+        return bytes;
+    }
     QualityContext(const QualityContext&) = delete;
     QualityContext& operator=(const QualityContext&) = delete;
     QualityContext(VkPhysicalDevice physical, VkDevice logical, const fs::path& shader_dir,
@@ -447,6 +500,32 @@ public:
         if(fsr411 && !nms) throw std::invalid_argument("4.1.1 requires the general layout");
         if(max_output_width>1920 || max_output_height>1080) { model_capacity_width=3840;model_capacity_height=2160; }
       try {
+        // Early descriptor-properties log: runs before any vkCreateSampler /
+        // layout / pipeline, so it survives a model_* vkCreateComputePipelines
+        // hang (Enshrouded model_6). Same format in smoke + provider for diff.
+        {
+            VkPhysicalDeviceDescriptorBufferPropertiesEXT early_props{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
+            VkPhysicalDeviceProperties2 early_props2{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            early_props2.pNext = &early_props;
+            vkGetPhysicalDeviceProperties2(physical, &early_props2);
+            if(build_message) {
+                build_message(std::string("descriptor_properties_early api=")+
+                    std::to_string(VK_API_VERSION_MAJOR(api_version))+"."+std::to_string(VK_API_VERSION_MINOR(api_version))+
+                    " queue="+(queue_family_index==UINT32_MAX ? std::string("unknown") : std::to_string(queue_family_index))+
+                    " max_render="+std::to_string(max_input_width)+"x"+std::to_string(max_input_height)+
+                    " max_output="+std::to_string(max_output_width)+"x"+std::to_string(max_output_height)+
+                    " robust="+(robust_buffer_access.has_value() ? std::to_string(int(*robust_buffer_access)) : std::string("unknown"))+
+                    " sampler="+std::to_string(early_props.samplerDescriptorSize)+
+                    " sampledImage="+std::to_string(early_props.sampledImageDescriptorSize)+
+                    " storageImage="+std::to_string(early_props.storageImageDescriptorSize)+
+                    " ubo="+std::to_string(early_props.uniformBufferDescriptorSize)+"/"+std::to_string(early_props.robustUniformBufferDescriptorSize)+
+                    " ssbo="+std::to_string(early_props.storageBufferDescriptorSize)+"/"+std::to_string(early_props.robustStorageBufferDescriptorSize)+
+                    " utex="+std::to_string(early_props.uniformTexelBufferDescriptorSize)+"/"+std::to_string(early_props.robustUniformTexelBufferDescriptorSize)+
+                    " stex="+std::to_string(early_props.storageTexelBufferDescriptorSize)+"/"+std::to_string(early_props.robustStorageTexelBufferDescriptorSize));
+            }
+        }
         color_shader_dir=shader_dir.parent_path().parent_path().parent_path()/"colors"/
                          shader_dir.parent_path().filename()/shader_dir.filename();
         fsr4vk::validate_descriptor_commands(device,get_device_proc_addr);
@@ -455,6 +534,36 @@ public:
         native_mixed_dot = !fsr411 && enabled_native_mixed_dot.value_or(true) && fsr4vk::supportsNativeMixedDot(
             physical, vkGetPhysicalDeviceFeatures2, vkEnumerateDeviceExtensionProperties);
         VkPipelineCacheCreateInfo cache_info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+        // Optional cold-compile workaround seed (Enshrouded model_6 hang on AMD
+        // Windows): a blob captured natively on the same GPU/driver lets
+        // vkCreateComputePipelines take the cache-hit path instead of invoking
+        // the runaway compiler. Scoped to 4.0.2 portable; any miss/staleness
+        // falls back to empty (status quo). Never throws: missing seed is normal.
+        std::vector<std::uint8_t> cache_seed;
+        if (!fsr411 && !native_mixed_dot) {
+            try {
+                fs::path seed_path = shader_dir / "pipeline_cache.portable.bin";
+                if (const char* env = std::getenv("FSR4_VK_PIPELINE_CACHE_PATH")) {
+                    if (*env) seed_path = env; // explicit override wins (game testing)
+                }
+                std::error_code seed_ec;
+                if (!seed_path.empty() && fs::is_regular_file(seed_path, seed_ec)) {
+                    auto bytes = read_bytes(seed_path);
+                    std::string why;
+                    if (validate_pipeline_cache_seed(physical, bytes, &why)) {
+                        cache_seed = std::move(bytes);
+                        cache_info.initialDataSize = cache_seed.size();
+                        cache_info.pInitialData = cache_seed.data();
+                        if(build_message) build_message("pipeline_cache_seed accepted bytes="+
+                            std::to_string(cache_seed.size())+" path="+seed_path.string());
+                    } else if(build_message) {
+                        build_message("pipeline_cache_seed rejected ("+why+") path="+seed_path.string());
+                    }
+                } else if (std::getenv("FSR4_VK_PIPELINE_CACHE_PATH") && build_message) {
+                    build_message("pipeline_cache_seed env path unreadable, proceeding empty");
+                }
+            } catch (...) { /* missing/unreadable seed -> cold compile */ }
+        }
         const auto cache_result=vkCreatePipelineCache(device,&cache_info,nullptr,&pipeline_cache);
         if(cache_result==VK_ERROR_DEVICE_LOST) check(cache_result,"vkCreatePipelineCache");
         if(cache_result!=VK_SUCCESS) {
@@ -506,8 +615,14 @@ public:
         check(vkCreateSampler(device, &sampler_info, nullptr, &sampler),
               "vkCreateSampler");
 
-        const VkDescriptorBindingFlags variable_descriptor_count =
-            VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+        // Issue #1 (RX 6600, AMD Windows 26.8.1): AMD reports a smaller
+        // vkGetDescriptorSetLayoutSizeEXT for VARIABLE_DESCRIPTOR_COUNT_BIT
+        // heaps than stride*128+offset, so DescriptorLayout threw
+        // "descriptor binding exceeds queried layout size". Heaps always hold
+        // 128 descriptors, the flag is not needed. Keep flags=0 on all heaps.
+        // descriptorBindingVariableDescriptorCount is still requested in the
+        // device contract for compatibility, but layouts do not rely on it.
+        const VkDescriptorBindingFlags heap_binding_flags = 0;
         const std::array<VkDescriptorType, 6> mutable_types{{
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -541,7 +656,7 @@ public:
         VkDescriptorSetLayoutBindingFlagsCreateInfo sampler_heap_flags{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         sampler_heap_flags.bindingCount = 1;
-        sampler_heap_flags.pBindingFlags = &variable_descriptor_count;
+        sampler_heap_flags.pBindingFlags = &heap_binding_flags;
         create_set_layout(0, &sampler_heap_binding, 1, &sampler_heap_flags,
                           VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT);
 
@@ -552,7 +667,7 @@ public:
              VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         }};
         const std::array<VkDescriptorBindingFlags, 2> image_heap_flag_values{{
-            0, variable_descriptor_count}};
+            0, heap_binding_flags}};
         const std::array<VkMutableDescriptorTypeListEXT, 2> image_heap_lists{{
             {0, nullptr}, mutable_list}};
         VkMutableDescriptorTypeCreateInfoEXT image_heap_mutable_info{
@@ -579,7 +694,7 @@ public:
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         buffer_heap_flags.pNext = &buffer_heap_mutable_info;
         buffer_heap_flags.bindingCount = 1;
-        buffer_heap_flags.pBindingFlags = &variable_descriptor_count;
+        buffer_heap_flags.pBindingFlags = &heap_binding_flags;
         create_set_layout(2, &buffer_heap_binding, 1, &buffer_heap_flags,
                           VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT);
 
@@ -668,6 +783,18 @@ public:
         // the allocation. Drivers are allowed to pad the overall layouts.
         descriptor_layout=fsr4vk::DescriptorLayout(descriptor_properties,descriptor_layout_sizes,
                                                    descriptor_binding_offsets,robust_buffer_access);
+        if(build_message) {
+            const auto& p=descriptor_properties;
+            build_message(std::string("descriptor_layout sizes=")+std::to_string(descriptor_layout_sizes[0])+","+
+                std::to_string(descriptor_layout_sizes[1])+","+std::to_string(descriptor_layout_sizes[2])+
+                " offsets="+std::to_string(descriptor_binding_offsets[0])+","+std::to_string(descriptor_binding_offsets[1])+","+
+                std::to_string(descriptor_binding_offsets[2])+" mutable_stride="+std::to_string(descriptor_layout.mutable_stride)+
+                " robust="+(robust_buffer_access.has_value() ? std::to_string(int(*robust_buffer_access)) : std::string("unknown"))+
+                " sampler="+std::to_string(p.samplerDescriptorSize)+" sampledImage="+std::to_string(p.sampledImageDescriptorSize)+
+                " storageImage="+std::to_string(p.storageImageDescriptorSize)+" ubo="+std::to_string(p.uniformBufferDescriptorSize)+
+                "/"+std::to_string(p.robustUniformBufferDescriptorSize)+" ssbo="+std::to_string(p.storageBufferDescriptorSize)+
+                "/"+std::to_string(p.robustStorageBufferDescriptorSize));
+        }
 
 
 

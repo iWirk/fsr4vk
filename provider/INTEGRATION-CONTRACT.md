@@ -1,6 +1,6 @@
 # Current provider integration contract
 
-Updated 2026-10-01. This is the setup/ownership contract, not a claim that every
+Updated 2026-10-16. This is the setup/ownership contract, not a claim that every
 device/game in the audit's proposed validation matrix has been retested.
 
 ## Device creation
@@ -9,7 +9,10 @@ Minimum API: Vulkan 1.1 plus the required extension-backed functionality.
 Enable before `vkCreateDevice`; physical support queries cannot recover logical
 enablement after creation. Generic `ffxQuery` device-requirements prepare/release
 preserves the caller's complete chain in owned storage. Unknown structures fail
-closed with their sType; they are never silently dropped.
+closed with their sType; they are never silently dropped. Pass-through nodes
+with no consumed state: `VK_EXT_pageable_device_local_memory`,
+`VK_EXT_image_robustness`, `VK_EXT_mesh_shader` (Enshrouded on AMD Windows;
+spoofing to NVIDIA for DLSS inputs is still required and unchanged).
 
 Mandatory unpromoted extensions:
 
@@ -20,7 +23,10 @@ Mandatory unpromoted extensions:
 Mandatory core features: `shaderInt16`, `shaderStorageImageReadWithoutFormat`,
 `shaderStorageImageWriteWithoutFormat`. Vulkan 1.2 features: `shaderFloat16`,
 `shaderInt8`, `storageBuffer8BitAccess`, `runtimeDescriptorArray`,
-`descriptorBindingVariableDescriptorCount`, `bufferDeviceAddress`. Below 1.2,
+`descriptorBindingVariableDescriptorCount`, `bufferDeviceAddress` (variable-count
+is still requested for compatibility, but descriptor heap layouts use flags=0
+with fixed 128 descriptors per GH issue #1: AMD Windows reports a smaller
+layout size for VARIABLE_DESCRIPTOR_COUNT_BIT heaps). Below 1.2,
 enable the corresponding `VK_KHR_shader_float16_int8`, `VK_KHR_8bit_storage`,
 `VK_EXT_descriptor_indexing`, `VK_KHR_buffer_device_address`, and
 `VK_KHR_shader_float_controls` extensions. Vulkan 1.3 features:
@@ -85,6 +91,15 @@ Logging remains optional and game-directory placement is unchanged. Negative
 event VkResults retain their identity. Opt-in pipeline progress logs name the
 pass and CPU creation duration. GPU-memory-usage v1 reports owned VkDeviceMemory
 allocation bytes, excluding caller images and driver pipeline/cache internals.
+
+Optional pipeline-cache seed (cold-compile workaround): `QualityContext` loads
+`<bundle>/pipeline_cache.portable.bin` when present (4.0.2 portable only), or
+the file named by `FSR4_VK_PIPELINE_CACHE_PATH` which wins when set. The 32-byte
+`VkPipelineCacheHeaderVersionOne` vendor/device/UUID is checked against the live
+physical device and logged as accepted/rejected; any miss proceeds with an empty
+cache (status quo). Capture via `FSR4_VK_PIPELINE_CACHE_DUMP=<out>` in
+`pipeline-resource-probe` on the same GPU/driver; blobs are not portable across
+devices/drivers.
 
 `FSR4_VK_PROFILE_PATH` is now a filename prefix, not an overwritable final-frame
 CSV. Each core/session writes `<prefix>.<identity>.jsonl`, with per-frame model,

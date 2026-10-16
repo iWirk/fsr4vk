@@ -1,6 +1,7 @@
 // Compile the production QualityContext pipelines without submitting GPU work.
 // Only this translation unit intercepts pipeline creation for inspection.
 #include <vulkan/vulkan.h>
+#include <cstdlib>
 #include <map>
 #include <vector>
 static std::map<VkShaderModule,std::vector<uint32_t>> compiled_module_inputs;
@@ -178,6 +179,8 @@ int main(int argc, char** argv) {
         VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
         app.pApplicationName = "FSR4 pipeline resource probe";
         app.apiVersion = VK_API_VERSION_1_3;
+        // Clean-seed capture: match the game device (api 1.2) when requested.
+        if (std::getenv("FSR4_TEST_VULKAN_1_2")) app.apiVersion = VK_API_VERSION_1_2;
         VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; ci.pApplicationInfo = &app;
         fsr4core::check(vkCreateInstance(&ci, nullptr, &instance), "create instance");
         uint32_t count = 0;
@@ -209,6 +212,9 @@ int main(int argc, char** argv) {
         capture = exe_features.pipelineExecutableInfo && std::any_of(ext.begin(),ext.end(),[](auto& e) {
             return std::string(e.extensionName) == VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME;
         });
+        // Clean-seed capture: CAPTURE_STATISTICS_BIT_KHR pollutes the cache key,
+        // so a blob captured with it can never hit a game-created pipeline.
+        if (std::getenv("FSR4_PROBE_NO_CAPTURE")) capture = false;
         if (!capture && !ir_dir.empty()) throw std::runtime_error("executable IR capture unsupported");
         std::cout << "{\"kind\":\"capture_support\",\"available\":" << (capture ? "true" : "false") << "}\n";
         uint32_t queues = 0;
@@ -236,9 +242,23 @@ int main(int argc, char** argv) {
             if (!get_properties || !get_statistics || !get_ir) throw std::runtime_error("missing executable entry points");
         }
         const bool large = bundle.parent_path().filename() == "2160";
+        // Game-matched capture: robust=1 like the OptiScaler snapshot (game),
+        // so layout/stride selection matches the hanging path exactly.
+        std::optional<bool> probe_robust;
+        if (std::getenv("FSR4_PROBE_FORCE_ROBUST")) probe_robust = true;
         { fsr4core::QualityContext context(physical[0], device, bundle, bundle/"initializers.bin", bundle/"weights.bin",
             true, vkGetDeviceProcAddr, large ? 3840 : 1920, large ? 2160 : 1080,
-            large ? 3840 : 1920, large ? 2160 : 1080, app.apiVersion); }
+            large ? 3840 : 1920, large ? 2160 : 1080, app.apiVersion, false, false, probe_robust);
+          if (const char* dump = std::getenv("FSR4_VK_PIPELINE_CACHE_DUMP")) {
+              if (!*dump) throw std::runtime_error("empty pipeline cache dump path");
+              const auto bytes = context.pipeline_cache_data();
+              if (bytes.empty()) throw std::runtime_error("driver returned empty pipeline cache");
+              std::ofstream file(dump, std::ios::binary | std::ios::trunc);
+              file.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+              if (!file) throw std::runtime_error("cannot write pipeline cache dump");
+              std::cout << "{\"kind\":\"pipeline_cache\",\"bytes\":" << bytes.size()
+                        << ",\"file\":" << quoted(dump) << "}\n";
+          } }
         if (pipeline_index != 15) throw std::runtime_error("unexpected production pipeline count");
         vkDestroyDevice(device,nullptr); device = {};
         vkDestroyInstance(instance,nullptr); instance = {};

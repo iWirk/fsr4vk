@@ -5,10 +5,15 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <type_traits>
 #include <thread>
 #include <limits>
+#ifdef _WIN32
+inline int setenv(const char* name, const char* value, int) { return _putenv_s(name, value); }
+inline int unsetenv(const char* name) { return _putenv_s(name, ""); }
+#endif
 
 // This CPU test creates no GPU resources. With dead stripping, only teardown
 // symbols remain reachable through ProviderContext's empty core map. Fail hard
@@ -69,7 +74,8 @@ int main() {
     // depth + HDR + external exposure must create without allocating GPU work.
     const auto test_assets=std::filesystem::current_path()/"build/preset-reporting-test/context-assets";
     std::filesystem::create_directories(test_assets/"general");
-    setenv("FSR4_VK_ASSET_ROOT",test_assets.c_str(),1);
+    const auto test_assets_narrow = test_assets.string();
+    setenv("FSR4_VK_ASSET_ROOT",test_assets_narrow.c_str(),1);
     CreateBackendVkDesc backend{{3,nullptr},reinterpret_cast<VkDevice>(1),
         reinterpret_cast<VkPhysicalDevice>(2),mockDeviceProc};
     ffxCreateContextDescUpscale create{};

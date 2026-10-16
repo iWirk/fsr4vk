@@ -255,6 +255,16 @@ class DeviceFeatures
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT);
             FSR4_COPY(VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR,
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR);
+            // Enshrouded on AMD Windows (RX 6950 XT, AMDVLK) emits these AMD
+            // EXT nodes. They carry no state the provider consumes, so copy
+            // them through instead of failing closed. Spoofing to NVIDIA for
+            // DLSS inputs is still required and unchanged.
+            FSR4_COPY(VkPhysicalDevicePageableDeviceLocalMemoryFeaturesEXT,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PAGEABLE_DEVICE_LOCAL_MEMORY_FEATURES_EXT);
+            FSR4_COPY(VkPhysicalDeviceImageRobustnessFeatures,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES);
+            FSR4_COPY(VkPhysicalDeviceMeshShaderFeaturesEXT,
+                      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT);
             FSR4_COPY(VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE,
                       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MIXED_FLOAT_DOT_PRODUCT_FEATURES_VALVE);
         default:

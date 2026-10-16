@@ -766,6 +766,10 @@ static ffxReturnCode_t dispatchImpl(
                     std::to_string(VK_API_VERSION_MINOR(properties.apiVersion))+"."+
                     std::to_string(VK_API_VERSION_PATCH(properties.apiVersion))+
                     " (properties reported by loader; host may spoof identity)");
+                diagnostic(*provider,"context api="+std::to_string(VK_API_VERSION_MAJOR(provider->apiVersion))+"."+
+                    std::to_string(VK_API_VERSION_MINOR(provider->apiVersion))+
+                    " queue_family="+(provider->queue_family_index==UINT32_MAX ? std::string("unknown") : std::to_string(provider->queue_family_index))+
+                    " (Enshrouded DLSS-input path requires NVIDIA spoof, e.g. vendor 4318 on AMD driver; do not disable spoofing to fix vendor mismatch)");
                 VkDeviceCreateInfo empty{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
                 try {
                     fsr4vk::DeviceFeatures supported(provider->physicalDevice,empty,properties.apiVersion,
@@ -794,6 +798,29 @@ static ffxReturnCode_t dispatchImpl(
             }
             diagnostic(*provider,"creating model="+selected_preset+
                        " exposure="+((provider->flags & FFX_UPSCALE_ENABLE_AUTO_EXPOSURE) ? "auto" : "external"));
+            // Early properties: survives a QualityContext model_* hang (game
+            // model_6). Same fields as QualityContext descriptor_properties_early.
+            {
+                VkPhysicalDeviceDescriptorBufferPropertiesEXT early_props{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_PROPERTIES_EXT};
+                VkPhysicalDeviceProperties2 early_props2{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                early_props2.pNext = &early_props;
+                vkGetPhysicalDeviceProperties2(provider->physicalDevice, &early_props2);
+                diagnostic(*provider,std::string("descriptor_properties_early api=")+
+                    std::to_string(VK_API_VERSION_MAJOR(provider->apiVersion))+"."+std::to_string(VK_API_VERSION_MINOR(provider->apiVersion))+
+                    " queue="+(provider->queue_family_index==UINT32_MAX ? std::string("unknown") : std::to_string(provider->queue_family_index))+
+                    " max_render="+std::to_string(provider->maxRenderSize.width)+"x"+std::to_string(provider->maxRenderSize.height)+
+                    " max_output="+std::to_string(provider->maxUpscaleSize.width)+"x"+std::to_string(provider->maxUpscaleSize.height)+
+                    " robust="+(provider->robust_buffer_access.has_value() ? std::to_string(int(*provider->robust_buffer_access)) : std::string("unknown"))+
+                    " sampler="+std::to_string(early_props.samplerDescriptorSize)+
+                    " sampledImage="+std::to_string(early_props.sampledImageDescriptorSize)+
+                    " storageImage="+std::to_string(early_props.storageImageDescriptorSize)+
+                    " ubo="+std::to_string(early_props.uniformBufferDescriptorSize)+"/"+std::to_string(early_props.robustUniformBufferDescriptorSize)+
+                    " ssbo="+std::to_string(early_props.storageBufferDescriptorSize)+"/"+std::to_string(early_props.robustStorageBufferDescriptorSize)+
+                    " utex="+std::to_string(early_props.uniformTexelBufferDescriptorSize)+"/"+std::to_string(early_props.robustUniformTexelBufferDescriptorSize)+
+                    " stex="+std::to_string(early_props.storageTexelBufferDescriptorSize)+"/"+std::to_string(early_props.robustStorageTexelBufferDescriptorSize));
+            }
             stage="model/pipeline creation";
             const auto build_started=std::chrono::steady_clock::now();
             const auto bucket=provider->maxUpscaleSize.width>1920 || provider->maxUpscaleSize.height>1080 ? "2160" : "1080";

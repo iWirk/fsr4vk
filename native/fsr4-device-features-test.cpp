@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -10,6 +11,12 @@
 #include <vector>
 
 namespace {
+#ifdef _WIN32
+// MSYS2 UCRT g++ with -std=c++20 hides POSIX setenv/unsetenv. Provide thin
+// wrappers over _putenv_s for this Windows-only test harness path.
+inline int setenv(const char* name, const char* value, int) { return _putenv_s(name, value); }
+inline int unsetenv(const char* name) { return _putenv_s(name, ""); }
+#endif
 std::vector<const char *> available_extensions;
 bool expose_synchronization2 = true;
 bool expose_mixed_dot = true;
@@ -630,6 +637,14 @@ int main() {
        1000135009, 1000283000, 1000102000, 1000287002, 1000411000,
        1000339000, 53, 51, 49},
       "Endfield device-chain structure was dropped");
+  // Enshrouded on AMD Windows (RX 6950 XT, AMDVLK) with NVIDIA spoof for DLSS
+  // inputs. Previously failed closed on 1000412000 pageable.
+  verify_logged_chain(
+      {1000201000, 1000506000, 1000316002, 1000225002, 1000314007,
+       1000059000, 49, 51, 1000276000, 1000044003, 1000238000,
+       1000412000, 1000335000, 1000286000, 1000328000, 1000150013,
+       1000348013},
+      "Enshrouded device-chain structure was dropped");
 
   for (bool extension_present : {false, true}) {
     const auto saved_extensions = available_extensions;
