@@ -1,6 +1,6 @@
 [submodule "optiscaler"]
 	path = optiscaler
-	url = https://github.com/dvj5411/OptiScaler.git
+	url = https://github.com/iWirk/OptiScaler-VK.git
 	branch = master
 [submodule "references/fsr4-shader-performance-overrides"]
 	path = references/fsr4-shader-performance-overrides

@@ -1,5 +1,5 @@
 diff --git a/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp b/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp
-index bc6a4733..7c1b8eaa 100644
+index 00034bbb..67e8133f 100644
 --- a/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp
 +++ b/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp
 @@ -3,6 +3,7 @@
@@ -20,7 +20,7 @@ index bc6a4733..7c1b8eaa 100644
      if (PhysicalDevice == nullptr)
      {
          LOG_ERROR("PhysicalDevice is null!");
-@@ -185,6 +189,20 @@ bool FFXFeatureVk::InitFFX(const NVSDK_NGX_Parameter* InParameters)
+@@ -191,6 +195,20 @@ bool FFXFeatureVk::InitFFX(const NVSDK_NGX_Parameter* InParameters)
          }
      }
  
@@ -38,10 +38,10 @@ index bc6a4733..7c1b8eaa 100644
 +    else if (requestedPreset != FSR4VK_PRESET_AUTO)
 +        LOG_WARN("Vulkan FSR4 provider does not advertise preset forcing; using provider default");
 +
-     auto version = State::Instance().ffxUpscalerVersionNames[Config::Instance()->FfxUpscalerIndex.value_or_default()];
+     auto version =
+         State::Instance().ffxUpscalerVersionsVk.names[Config::Instance()->FfxUpscalerIndex.value_or_default()];
      _name = "FSR";
-     parse_version(version);
-@@ -208,6 +226,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
+@@ -215,6 +233,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
  {
      LOG_FUNC();
  
@@ -50,7 +50,7 @@ index bc6a4733..7c1b8eaa 100644
      if (!IsInited())
          return false;
  
-@@ -543,5 +563,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
+@@ -550,5 +570,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
          return false;
      }
  
@@ -60,7 +60,7 @@ index bc6a4733..7c1b8eaa 100644
      return true;
  }
 diff --git a/OptiScaler/upscalers/ffx/FFXFeature_Vk.h b/OptiScaler/upscalers/ffx/FFXFeature_Vk.h
-index eb58f095..d888a9e8 100644
+index c9c758da..aa195ee4 100644
 --- a/OptiScaler/upscalers/ffx/FFXFeature_Vk.h
 +++ b/OptiScaler/upscalers/ffx/FFXFeature_Vk.h
 @@ -8,6 +8,7 @@

@@ -17,8 +17,8 @@ jobs:
           path: build/vulkan-headers
       - uses: actions/checkout@v4
         with:
-          repository: dvj5411/OptiScaler
-          ref: 613492a8909929dfd618b03df08e47b07055c0b0
+          repository: iWirk/OptiScaler-VK
+          ref: 9ce9340beeef3d016dcdb9c563d87bb7f94bf21b
           path: build/opti-reader
       - name: CPU tests (no GPU or deployment)
         env:

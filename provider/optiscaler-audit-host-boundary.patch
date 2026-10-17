@@ -1,5 +1,5 @@
 diff --git a/OptiScaler/hooks/Vulkan_Hooks.cpp b/OptiScaler/hooks/Vulkan_Hooks.cpp
-index f67bc055..1baa5dd3 100644
+index 5f65cd31..5998a8fd 100644
 --- a/OptiScaler/hooks/Vulkan_Hooks.cpp
 +++ b/OptiScaler/hooks/Vulkan_Hooks.cpp
 @@ -7,6 +7,8 @@
@@ -11,7 +11,7 @@ index f67bc055..1baa5dd3 100644
  #include <proxies/FfxApi_Proxy.h>
  
  #include <menu/menu_overlay_vk.h>
-@@ -36,6 +38,25 @@ static HWND _hwnd = nullptr;
+@@ -49,6 +51,25 @@ static std::unordered_map<VkSurfaceKHR, HWND> _surfaceWindows;
  static std::mutex _vkApiVersionMutex;
  static std::unordered_map<VkInstance, uint32_t> _instanceApiVersions;
  static std::unordered_map<VkPhysicalDevice, VkInstance> _physicalDeviceInstances;
@@ -37,7 +37,7 @@ index f67bc055..1baa5dd3 100644
  
  static std::mutex _vkPresentMutex;
  
-@@ -176,6 +197,14 @@ static uint32_t GetPhysicalDeviceApiVersion(VkPhysicalDevice physicalDevice, VkI
+@@ -431,6 +452,14 @@ static uint32_t GetPhysicalDeviceApiVersion(VkPhysicalDevice physicalDevice, VkI
  static void UntrackInstance(VkInstance instance)
  {
      std::scoped_lock lock(_vkApiVersionMutex);
@@ -52,7 +52,7 @@ index f67bc055..1baa5dd3 100644
      _instanceApiVersions.erase(instance);
  
      for (auto it = _physicalDeviceInstances.begin(); it != _physicalDeviceInstances.end();)
-@@ -392,6 +421,27 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
+@@ -686,6 +715,27 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
              }
          }
          result = o_vkCreateDevice(physicalDevice, deviceCreateInfo, pAllocator, pDevice);
@@ -81,10 +81,10 @@ index f67bc055..1baa5dd3 100644
          if (providerRequirements.token)
          {
 diff --git a/OptiScaler/hooks/Vulkan_Hooks.h b/OptiScaler/hooks/Vulkan_Hooks.h
-index a05a6fcd..0544062e 100644
+index ec156db9..152a7f69 100644
 --- a/OptiScaler/hooks/Vulkan_Hooks.h
 +++ b/OptiScaler/hooks/Vulkan_Hooks.h
-@@ -10,4 +10,6 @@ class VulkanHooks
+@@ -44,4 +44,6 @@ class VulkanHooks
  
      static void Hook(HMODULE vulkan1);
      static void Unhook();
@@ -153,7 +153,7 @@ index 00000000..1aeae107
 +}
 +} // namespace fsr4vk
 diff --git a/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp b/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp
-index db61c2e1..6cf05922 100644
+index 3d34a968..57666989 100644
 --- a/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp
 +++ b/OptiScaler/upscalers/ffx/FFXFeature_Vk.cpp
 @@ -4,7 +4,10 @@
@@ -167,7 +167,7 @@ index db61c2e1..6cf05922 100644
  #include "nvsdk_ngx_vk.h"
  #include "MathUtils.h"
  
-@@ -206,6 +209,18 @@ bool FFXFeatureVk::InitFFX(const NVSDK_NGX_Parameter* InParameters)
+@@ -212,6 +215,18 @@ bool FFXFeatureVk::InitFFX(const NVSDK_NGX_Parameter* InParameters)
          _nativeInputsSupported =
              FfxApiProxy::VULKAN_Query()(nullptr, &nativeQuery.header) == FFX_API_RETURN_OK && nativeQuery.version == 1;
  
@@ -186,7 +186,7 @@ index db61c2e1..6cf05922 100644
          LOG_DEBUG("_createContext!");
          auto ret = FfxApiProxy::VULKAN_CreateContext()(&_context, &_contextDesc.header, NULL);
  
-@@ -280,8 +295,7 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
+@@ -287,8 +302,7 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
      InParameters->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &params.jitterOffset.x);
      InParameters->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &params.jitterOffset.y);
  
@@ -196,7 +196,7 @@ index db61c2e1..6cf05922 100644
      params.reset = (reset == 1);
  
      GetRenderResolution(InParameters, &params.renderSize.width, &params.renderSize.height);
-@@ -290,10 +304,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
+@@ -297,10 +311,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
  
      params.commandList = InCmdBuffer;
  
@@ -209,7 +209,7 @@ index db61c2e1..6cf05922 100644
      {
          LOG_DEBUG("Color exist..");
  
-@@ -307,10 +319,9 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
+@@ -314,10 +326,9 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
          return false;
      }
  
@@ -223,7 +223,7 @@ index db61c2e1..6cf05922 100644
      {
          LOG_DEBUG("MotionVectors exist..");
  
-@@ -330,10 +341,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
+@@ -337,10 +348,8 @@ bool FFXFeatureVk::EvaluateInternal(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Param
          return false;
      }
  
