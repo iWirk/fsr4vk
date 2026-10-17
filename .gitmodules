@@ -2,3 +2,9 @@
 	path = optiscaler
 	url = https://github.com/dvj5411/OptiScaler.git
 	branch = master
+[submodule "references/fsr4-shader-performance-overrides"]
+	path = references/fsr4-shader-performance-overrides
+	url = git@github.com:zgauthier2000/fsr4-shader-performance-overrides.git
+[submodule "references/bg3fgvk"]
+	path = references/bg3fgvk
+	url = git@github.com:thierbig/bg3fgvk.git
