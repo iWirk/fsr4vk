@@ -9,3 +9,8 @@ Installation steps:
 
 Notes:
 - If there are any problems, please add into the launch args "FSR4_VK_LOG=1".
+- Frame generation is passed through to the stock amd_fidelityfx_vk.dll that
+  OptiScaler ships; keep that file next to amd_fidelityfx_upscaler_vk.dll in
+  the OptiScaler folder. The provider may create a renamed copy of it
+  (fsr4vk-fg-host.dll) because OptiScaler's loader hook serves the original
+  name from the provider itself.

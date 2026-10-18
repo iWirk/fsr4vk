@@ -84,6 +84,14 @@ Radeon PRO W6400; support for other GPU/driver combinations is not implied.
 OptiScaler routes its sharpening control through RCAS because internal provider
 sharpening is not supported.
 
+Frame generation: installing this provider under the upscaler name also routes
+OptiScaler's FSR frame-generation requests to it. They are forwarded to the
+sibling legacy `amd_fidelityfx_vk.dll` (the stock AMD library) in the same
+directory, so keep that file installed to use FSR frame generation together
+with the FSR 4 upscaler. Because OptiScaler's loader hook serves the stock name
+from the provider itself, the provider loads a renamed copy of that file
+(`fsr4vk-fg-host.dll`, a hard link or copy) instead.
+
 See [the integration contract](provider/INTEGRATION-CONTRACT.md) and
 [v0.4.3 verification](docs/RELEASE-0.4.3-VALIDATION.md) for current requirements
 and tested scope. FSR 4.1.1's captured shaders leave an unmatched final row or

@@ -100,6 +100,34 @@ int main(int argc, char** argv) {
     std::cout << "selector_names=FSR" << names[0] << ",FSR" << names[1] << '\n';
     std::cout << "version_list=all-models bounded_query=passed\n";
 
+    // Frame generation is not implemented by this provider. Non-upscale
+    // version queries must answer with OK, either forwarded to a sibling
+    // stock amd_fidelityfx_vk.dll (count>0) or unsupported (count==0).
+    std::uint64_t fgCount = 0;
+    ffxQueryDescGetVersions fgVersions{};
+    fgVersions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+    fgVersions.createDescType = 0x00020001u;
+    fgVersions.outputCount = &fgCount;
+    const auto fgCountResult = query(nullptr, &fgVersions.header);
+    std::cout << "fg_count_result=" << fgCountResult << " fg_count=" << fgCount << '\n';
+    if (fgCountResult != FFX_API_RETURN_OK) return 1;
+    if (fgCount > 0) {
+        if (fgCount > 8) return 1;
+        std::uint64_t fgIds[8]{};
+        const char* fgNames[8]{};
+        std::uint64_t capacity = 8;
+        fgVersions.versionIds = fgIds;
+        fgVersions.versionNames = fgNames;
+        fgVersions.outputCount = &capacity;
+        if (query(nullptr, &fgVersions.header) != FFX_API_RETURN_OK) return 1;
+        if (capacity != fgCount) return 1;
+        for (std::uint64_t i = 0; i < fgCount; ++i)
+            if (!fgIds[i] || !fgNames[i]) return 1;
+        std::cout << "fg_versions=forwarded count=" << fgCount << '\n';
+    } else {
+        std::cout << "fg_versions=unsupported (no sibling stock amd_fidelityfx_vk.dll)\n";
+    }
+
     uint32_t rw=0, rh=0;
     ffxQueryDescUpscaleGetRenderResolutionFromQualityMode resolution{};
     resolution.header.type=FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;

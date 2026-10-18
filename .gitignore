@@ -2,3 +2,5 @@
 .runtime/
 build/
 dist/
+references/externals
+mods/

@@ -1,6 +1,6 @@
 # Current provider integration contract
 
-Updated 2026-10-16. This is the setup/ownership contract, not a claim that every
+Updated 2026-10-17. This is the setup/ownership contract, not a claim that every
 device/game in the audit's proposed validation matrix has been retested.
 
 ## Device creation
@@ -80,6 +80,30 @@ exclusive context destruction. Callbacks may query, but must not recursively
 dispatch or destroy their own context.
 Eight descriptor/constant/view slots remain independent; the ninth outstanding
 frame is rejected. Preset cores stay alive until context destruction.
+
+## Non-upscale requests and frame-generation pass-through
+
+Only `UPSCALE` create requests are implemented here. Other create types
+(frame generation `0x00020001`, HUD-less frame generation `0x00020009`, and the
+Vulkan frame-generation swapchain `0x00040001`) are forwarded, together with
+their contexts' later query/configure/dispatch/destroy calls, to a sibling
+`amd_fidelityfx_vk.dll` next to this module. The sibling is accepted only when
+it resolves all five FFX entry points and advertises upscale versions other
+than this provider's `4.1.1` IDs, so the stock AMD library (FSR 3.1.4 family,
+shipped with OptiScaler) is accepted while a byte copy of this provider is
+rejected and never called back into itself. Hosts that intercept the stock
+`amd_fidelityfx_vk.dll` name at the loader level (OptiScaler's `LdrLoadDll`
+hook serves its already-loaded upscaler module for that name) make the plain
+load resolve to this provider; the provider then loads a renamed sibling copy
+(`fsr4vk-fg-host.dll`, a hard link beside the sibling, falling back to a byte
+copy in the same directory or `%TEMP%`) whose name no loader hook matches.
+Non-upscale `GET_VERSIONS` queries
+are also forwarded; without an accepted sibling they keep returning an empty
+result, and non-upscale creation keeps returning `FFX_API_RETURN_NO_PROVIDER`.
+The pass-through decision and forwarded request types are written to the
+provider diagnostic log. Deployment requirement: keep the stock
+`amd_fidelityfx_vk.dll` beside `amd_fidelityfx_upscaler_vk.dll` in
+`OptiScaler/` to use FSR frame generation together with the FSR4 upscaler.
 
 ## Diagnostics and measurements
 

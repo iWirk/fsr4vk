@@ -24,11 +24,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
 #include <new>
 #include <memory>
 #include <map>
+#include <unordered_set>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -199,6 +205,298 @@ void deallocate(const ffxAllocationCallbacks* callbacks, void* memory) {
     if (callbacks) callbacks->dealloc(callbacks->pUserData, memory);
     else std::free(memory);
 }
+
+// Non-upscale requests (frame generation, HUD-less and the Vulkan frame
+// generation swapchain) are not implemented here. When a sibling
+// amd_fidelityfx_vk.dll exists next to this provider, those calls are
+// forwarded to it so FSR4 upscaling and FSR frame generation can be used
+// together. Upscale requests never leave this DLL.
+#if defined(_WIN32)
+struct ForwardedTarget {
+    void* module{};
+    PfnFfxCreateContext createContext{};
+    PfnFfxDestroyContext destroyContext{};
+    PfnFfxConfigure configure{};
+    PfnFfxQuery query{};
+    PfnFfxDispatch dispatch{};
+    bool available{false};
+    bool attempted{false};
+};
+
+std::mutex& forwarded_mutex() noexcept {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_set<void*>& forwarded_contexts() noexcept {
+    static std::unordered_set<void*> contexts;
+    return contexts;
+}
+
+bool isForwardedContext(const void* context) noexcept {
+    if (!context) return false;
+    try {
+        const std::lock_guard<std::mutex> lock(forwarded_mutex());
+        return forwarded_contexts().count(const_cast<void*>(context)) != 0;
+    } catch (...) { return false; }
+}
+
+void unregisterForwardedContext(void* context) noexcept {
+    try {
+        const std::lock_guard<std::mutex> lock(forwarded_mutex());
+        forwarded_contexts().erase(context);
+    } catch (...) { }
+}
+
+void forwardingDiagnostic(const std::string& text) noexcept {
+    write_diagnostic(diagnostic_path(),0,"frame-generation pass-through: "+text);
+}
+
+std::string hexId(std::uint64_t value) {
+    char buffer[19]{};
+    std::snprintf(buffer,sizeof(buffer),"0x%llx",static_cast<unsigned long long>(value));
+    return buffer;
+}
+
+const char* createContextTypeName(ffxStructType_t type) noexcept {
+    switch (type) {
+    case 0x00020001u: return "frame-generation";
+    case 0x00020009u: return "frame-generation-hudless";
+    case 0x00040001u: return "frame-generation-swapchain-vk";
+    default: return "other";
+    }
+}
+
+// Some hosts (OptiScaler) intercept the stock amd_fidelityfx_vk.dll name at
+// the loader level and hand back their already-loaded upscaler module, which
+// would make the sibling "load" resolve to this provider. Those interceptors
+// match on the file name, so a renamed sibling copy loads for real. Prefer a
+// hard link beside the sibling, fall back to copying, and use the TEMP
+// directory when the installation is not writable.
+std::filesystem::path stockHostPath(const std::filesystem::path& stock) noexcept {
+    try {
+        std::error_code error;
+        const auto size=std::filesystem::file_size(stock,error);
+        if (error) return {};
+        auto destination=stock.parent_path()/"fsr4vk-fg-host.dll";
+        if (std::filesystem::file_size(destination,error)==size && !error)
+            return destination;
+        if (CreateHardLinkW(destination.c_str(),stock.c_str(),nullptr))
+            return destination;
+        error.clear();
+        std::filesystem::copy_file(stock,destination,
+                                   std::filesystem::copy_options::overwrite_existing,
+                                   error);
+        if (!error) return destination;
+        error.clear();
+        const auto temp=std::filesystem::temp_directory_path(error);
+        if (error) return {};
+        destination=temp/(L"fsr4vk-fg-host-"+std::to_wstring(GetCurrentProcessId())+L".dll");
+        error.clear();
+        std::filesystem::copy_file(stock,destination,
+                                   std::filesystem::copy_options::overwrite_existing,
+                                   error);
+        if (error) return {};
+        return destination;
+    } catch (...) {
+        return {};
+    }
+}
+
+ForwardedTarget& forwardTarget() noexcept {
+    static ForwardedTarget target;
+    if (target.attempted) return target;
+    target.attempted=true;
+    try {
+        HMODULE self{};
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                reinterpret_cast<LPCWSTR>(&ffxCreateContext),&self)) {
+            forwardingDiagnostic("cannot resolve provider module; pass-through disabled");
+            return target;
+        }
+        wchar_t path[32768]{};
+        const auto length=GetModuleFileNameW(self,path,32768);
+        if (!length || length>=32768) {
+            forwardingDiagnostic("cannot resolve provider module path; pass-through disabled");
+            return target;
+        }
+        const auto sibling=std::filesystem::path(path).parent_path()/"amd_fidelityfx_vk.dll";
+        auto candidate=LoadLibraryW(sibling.c_str());
+        std::string source="sibling amd_fidelityfx_vk.dll";
+        if (!candidate) {
+            forwardingDiagnostic("sibling amd_fidelityfx_vk.dll not found next to the provider; non-upscale requests are reported as unsupported");
+            return target;
+        }
+        if (reinterpret_cast<void*>(candidate)==reinterpret_cast<void*>(self)) {
+            FreeLibrary(candidate);
+            forwardingDiagnostic("sibling amd_fidelityfx_vk.dll was served from this module; trying a renamed copy");
+            const auto renamed=stockHostPath(sibling);
+            candidate=renamed.empty() ? nullptr : LoadLibraryW(renamed.c_str());
+            if (candidate && reinterpret_cast<void*>(candidate)==reinterpret_cast<void*>(self)) {
+                FreeLibrary(candidate);
+                candidate=nullptr;
+                std::error_code error;
+                std::filesystem::remove(renamed,error);
+                error.clear();
+                std::filesystem::copy_file(sibling,renamed,
+                                           std::filesystem::copy_options::overwrite_existing,
+                                           error);
+                if (!error) {
+                    candidate=LoadLibraryW(renamed.c_str());
+                    if (candidate && reinterpret_cast<void*>(candidate)==reinterpret_cast<void*>(self)) {
+                        FreeLibrary(candidate);
+                        candidate=nullptr;
+                    }
+                }
+            }
+            if (!candidate) {
+                forwardingDiagnostic("renamed sibling copy unavailable; pass-through disabled");
+                return target;
+            }
+            source="renamed sibling copy "+renamed.filename().string();
+        }
+        const auto address=[candidate](const char* name) noexcept {
+            return reinterpret_cast<void*>(GetProcAddress(candidate,name));
+        };
+        const auto create=reinterpret_cast<PfnFfxCreateContext>(address("ffxCreateContext"));
+        const auto destroy=reinterpret_cast<PfnFfxDestroyContext>(address("ffxDestroyContext"));
+        const auto configure=reinterpret_cast<PfnFfxConfigure>(address("ffxConfigure"));
+        const auto query=reinterpret_cast<PfnFfxQuery>(address("ffxQuery"));
+        const auto dispatch=reinterpret_cast<PfnFfxDispatch>(address("ffxDispatch"));
+        if (!create || !destroy || !configure || !query || !dispatch) {
+            FreeLibrary(candidate);
+            forwardingDiagnostic("sibling amd_fidelityfx_vk.dll is missing FFX entry points; pass-through disabled");
+            return target;
+        }
+        std::uint64_t ids[2]{};
+        std::uint64_t capacity=2;
+        ffxQueryDescGetVersions versions{};
+        versions.header.type=FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+        versions.createDescType=FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+        versions.versionIds=ids;
+        versions.outputCount=&capacity;
+        bool alias=false;
+        try {
+            alias=query(nullptr,&versions.header)==FFX_API_RETURN_OK && capacity==2 &&
+                  (ids[0]==kVersion411Id || ids[0]==kVersion411PerfId);
+        } catch (...) { alias=true; }
+        if (alias) {
+            FreeLibrary(candidate);
+            forwardingDiagnostic("sibling amd_fidelityfx_vk.dll advertises this provider's upscale versions; treated as a second copy of this module, pass-through disabled");
+            return target;
+        }
+        target.module=candidate;
+        target.createContext=create;
+        target.destroyContext=destroy;
+        target.configure=configure;
+        target.query=query;
+        target.dispatch=dispatch;
+        target.available=true;
+        forwardingDiagnostic("forwarding non-upscale FFX calls to "+source);
+    } catch (...) {
+        forwardingDiagnostic("pass-through setup failed; non-upscale requests are reported as unsupported");
+    }
+    return target;
+}
+
+bool forwardAvailable() noexcept { return forwardTarget().available; }
+
+ffxReturnCode_t forwardCreateContext(
+    ffxContext* context,
+    ffxCreateContextDescHeader* header,
+    const ffxAllocationCallbacks* callbacks) {
+    const auto& target=forwardTarget();
+    if (!target.available) return FFX_API_RETURN_NO_PROVIDER;
+    forwardingDiagnostic("create request type="+hexId(header->type)+" ("+createContextTypeName(header->type)+")");
+    const auto code=target.createContext(context,header,callbacks);
+    if (code!=FFX_API_RETURN_OK) {
+        forwardingDiagnostic("create request type="+hexId(header->type)+" returned "+hexId(code));
+        return code;
+    }
+    if (context && *context) {
+        try {
+            const std::lock_guard<std::mutex> lock(forwarded_mutex());
+            forwarded_contexts().insert(*context);
+        } catch (...) {
+            target.destroyContext(context,callbacks);
+            *context=nullptr;
+            return FFX_API_RETURN_ERROR_MEMORY;
+        }
+    }
+    return code;
+}
+
+ffxReturnCode_t forwardDestroyContext(
+    ffxContext* context,
+    const ffxAllocationCallbacks* callbacks) {
+    const auto& target=forwardTarget();
+    if (!target.available) return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+    void* handle=context ? *context : nullptr;
+    const auto code=target.destroyContext(context,callbacks);
+    if (code==FFX_API_RETURN_OK && handle) unregisterForwardedContext(handle);
+    return code;
+}
+
+ffxReturnCode_t forwardConfigure(
+    ffxContext* context,
+    const ffxConfigureDescHeader* header) {
+    const auto& target=forwardTarget();
+    if (!target.available) return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+    return target.configure(context,header);
+}
+
+ffxReturnCode_t forwardQuery(
+    ffxContext* context,
+    ffxQueryDescHeader* header) {
+    const auto& target=forwardTarget();
+    if (!target.available) return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+    return target.query(context,header);
+}
+
+ffxReturnCode_t forwardDispatch(
+    ffxContext* context,
+    const ffxDispatchDescHeader* header) {
+    const auto& target=forwardTarget();
+    if (!target.available) return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+    return target.dispatch(context,header);
+}
+#else
+bool isForwardedContext(const void*) noexcept { return false; }
+
+bool forwardAvailable() noexcept { return false; }
+
+ffxReturnCode_t forwardCreateContext(
+    ffxContext*,
+    ffxCreateContextDescHeader*,
+    const ffxAllocationCallbacks*) noexcept {
+    return FFX_API_RETURN_NO_PROVIDER;
+}
+
+ffxReturnCode_t forwardDestroyContext(
+    ffxContext*,
+    const ffxAllocationCallbacks*) noexcept {
+    return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+}
+
+ffxReturnCode_t forwardConfigure(
+    ffxContext*,
+    const ffxConfigureDescHeader*) noexcept {
+    return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+}
+
+ffxReturnCode_t forwardQuery(
+    ffxContext*,
+    ffxQueryDescHeader*) noexcept {
+    return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+}
+
+ffxReturnCode_t forwardDispatch(
+    ffxContext*,
+    const ffxDispatchDescHeader*) noexcept {
+    return FFX_API_RETURN_ERROR_RUNTIME_ERROR;
+}
+#endif
 
 void validateApiChain(const ffxApiHeader* header) {
     std::array<const ffxApiHeader*,64> seen{};
@@ -444,7 +742,7 @@ static ffxReturnCode_t createContextImpl(
     if (!context || !header || !validAllocator(callbacks)) return FFX_API_RETURN_ERROR_PARAMETER;
     *context = nullptr;
     if (header->type != FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE) {
-        return FFX_API_RETURN_NO_PROVIDER;
+        return forwardCreateContext(context,header,callbacks);
     }
     validateApiChain(header);
     for(const auto type : std::array<ffxStructType_t,4>{kBackendVkDescType,FFX_API_DESC_TYPE_OVERRIDE_VERSION,kFsr4VulkanApiVersionDescType,FSR4VK_CREATE_DESC_TYPE_DEVICE_FEATURES}) {
@@ -548,6 +846,7 @@ static ffxReturnCode_t destroyContextImpl(
     ffxContext* context,
     const ffxAllocationCallbacks* callbacks) {
     if (!context || !*context || !validAllocator(callbacks)) return FFX_API_RETURN_ERROR_PARAMETER;
+    if (isForwardedContext(*context)) return forwardDestroyContext(context,callbacks);
     auto* provider = reinterpret_cast<ProviderContext*>(*context);
     try { diagnostic(*provider,"context destroyed cached_models="+std::to_string(provider->cores.size())+
         " dispatch_attempts="+std::to_string(provider->dispatch_attempts)+
@@ -564,6 +863,7 @@ static ffxReturnCode_t configureImpl(
     ffxContext* context,
     const ffxConfigureDescHeader* header) {
     if (!context || !*context || !header) return FFX_API_RETURN_ERROR_PARAMETER;
+    if (isForwardedContext(*context)) return forwardConfigure(context,header);
     const std::lock_guard<std::recursive_mutex> lock(static_cast<ProviderContext*>(*context)->api_mutex);
     validateApiChain(header);
     if (header->type == FSR4VK_CONFIGURE_DESC_TYPE_PRESET) {
@@ -592,6 +892,7 @@ static ffxReturnCode_t queryImpl(
     ffxContext* context,
     ffxQueryDescHeader* header) {
     if (!header) return FFX_API_RETURN_ERROR_PARAMETER;
+    if (context && *context && isForwardedContext(*context)) return forwardQuery(context,header);
     validateApiChain(header);
     std::unique_lock<std::recursive_mutex> lock;
     if(context && *context) lock=std::unique_lock<std::recursive_mutex>(static_cast<ProviderContext*>(*context)->api_mutex);
@@ -605,6 +906,7 @@ static ffxReturnCode_t queryImpl(
         auto* query = reinterpret_cast<ffxQueryDescGetVersions*>(header);
         if (!query->outputCount) return FFX_API_RETURN_ERROR_PARAMETER;
         if (query->createDescType != FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE) {
+            if (forwardAvailable()) return forwardQuery(nullptr,header);
             *query->outputCount = 0;
             return FFX_API_RETURN_OK;
         }
@@ -627,6 +929,7 @@ static ffxReturnCode_t dispatchImpl(
     ffxContext* context,
     const ffxDispatchDescHeader* header) {
     if (!context || !*context || !header) return FFX_API_RETURN_ERROR_PARAMETER;
+    if (isForwardedContext(*context)) return forwardDispatch(context,header);
     const std::lock_guard<std::recursive_mutex> lock(static_cast<ProviderContext*>(*context)->api_mutex);
     validateApiChain(header);
     if (header->type != FFX_API_DISPATCH_DESC_TYPE_UPSCALE) {
